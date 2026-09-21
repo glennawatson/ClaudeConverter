@@ -1,0 +1,30 @@
+// Copyright (c) 2026 Glenn Watson and Contributors. All rights reserved.
+// Glenn Watson and Contributors licenses this file to you under the MIT license.
+// See the LICENSE file in the project root for full license information.
+using ClaudeNim.Aot.Configuration;
+using ClaudeNim.Aot.Nvidia;
+using ClaudeNim.Aot.RateLimiting;
+using ClaudeNim.Aot.Routing;
+using Microsoft.Extensions.Logging;
+
+namespace ClaudeNim.Aot.Endpoints;
+
+/// <summary>Everything one Messages API turn is served from.</summary>
+/// <param name="Router">Chooses the NIM model that serves the requested one.</param>
+/// <param name="Client">The upstream transport.</param>
+/// <param name="Gate">Bounds how fast requests reach the upstream.</param>
+/// <param name="Nim">The configured NIM defaults.</param>
+/// <param name="Optimizations">The switches for the local fast paths.</param>
+/// <param name="Logger">The diagnostic log.</param>
+/// <remarks>
+/// The handler takes this one parameter rather than five. A minimal API endpoint's signature is
+/// its dependency list, and five of them makes the shape of the turn harder to read than the code
+/// that serves it.
+/// </remarks>
+public sealed record MessageServices(
+    IModelRouter Router,
+    INimClient Client,
+    IRequestGate Gate,
+    NvidiaNimOptions Nim,
+    OptimizationOptions Optimizations,
+    ILogger<MessageServices> Logger);

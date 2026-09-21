@@ -1,0 +1,97 @@
+<Project>
+
+  <PropertyGroup Label="Package metadata">
+    <CopyrightStartYear>2025</CopyrightStartYear>
+    <CopyrightCurrentYear>$([System.DateTime]::UtcNow.ToString("yyyy"))</CopyrightCurrentYear>
+    <CopyrightYearRange Condition="'$(CopyrightCurrentYear)' == '$(CopyrightStartYear)'">$(CopyrightStartYear)</CopyrightYearRange>
+    <CopyrightYearRange Condition="'$(CopyrightCurrentYear)' != '$(CopyrightStartYear)'">$(CopyrightStartYear)-$(CopyrightCurrentYear)</CopyrightYearRange>
+    <Copyright>Copyright (c) $(CopyrightYearRange) Glenn Watson and Contributors</Copyright>
+    <Authors>Glenn Watson and Contributors</Authors>
+    <Owners>glennawatson</Owners>
+    <Company>Glenn Watson</Company>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <PackageProjectUrl>https://github.com/glennawatson/claude-nim-aot-csharp</PackageProjectUrl>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+    <PackageRequireLicenseAcceptance>false</PackageRequireLicenseAcceptance>
+    <RepositoryUrl>https://github.com/glennawatson/claude-nim-aot-csharp</RepositoryUrl>
+    <RepositoryType>git</RepositoryType>
+  </PropertyGroup>
+
+  <PropertyGroup Label="Language">
+    <TargetFrameworks>net10.0;net11.0</TargetFrameworks>
+    <LangVersion>15.0</LangVersion>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <NeutralLanguage>en-US</NeutralLanguage>
+    <InvariantGlobalization>true</InvariantGlobalization>
+  </PropertyGroup>
+
+  <PropertyGroup Label="Symbols and source link">
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <DebugType>embedded</DebugType>
+    <PublishRepositoryUrl>true</PublishRepositoryUrl>
+    <EmbedUntrackedSources>true</EmbedUntrackedSources>
+    <ContinuousIntegrationBuild Condition="'$(GITHUB_ACTIONS)' == 'true'">true</ContinuousIntegrationBuild>
+    <AllowedOutputExtensionsInPackageBuildOutputFolder>$(AllowedOutputExtensionsInPackageBuildOutputFolder);.pdb</AllowedOutputExtensionsInPackageBuildOutputFolder>
+  </PropertyGroup>
+
+  <PropertyGroup Label="Analysis">
+    <EnableNETAnalyzers>true</EnableNETAnalyzers>
+    <AnalysisLevel>latest</AnalysisLevel>
+    <EnforceCodeStyleInBuild>true</EnforceCodeStyleInBuild>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <IsPackable>false</IsPackable>
+    <IsPublishable>false</IsPublishable>
+  </PropertyGroup>
+
+  <!--
+    Native AOT. The source generators below replace every reflection-based path the
+    proxy would otherwise take: request delegates, configuration binding and JSON.
+    JsonSerializerIsReflectionEnabledByDefault=false turns a missed contract into a
+    development-time exception rather than a publish-time trim warning.
+  -->
+  <PropertyGroup Label="Ahead-of-time compilation" Condition="'$(MSBuildProjectName)' == 'ClaudeNim.Aot'">
+    <PublishAot>true</PublishAot>
+    <StripSymbols>true</StripSymbols>
+    <IlcOptimizationPreference>Speed</IlcOptimizationPreference>
+    <EnableRequestDelegateGenerator>true</EnableRequestDelegateGenerator>
+    <EnableConfigurationBindingGenerator>true</EnableConfigurationBindingGenerator>
+    <JsonSerializerIsReflectionEnabledByDefault>false</JsonSerializerIsReflectionEnabledByDefault>
+  </PropertyGroup>
+
+  <PropertyGroup Label="Test projects">
+    <IsTestProject Condition="$(MSBuildProjectName.EndsWith('Tests'))">true</IsTestProject>
+  </PropertyGroup>
+
+  <PropertyGroup Condition="'$(IsTestProject)' == 'true'">
+    <OutputType>Exe</OutputType>
+    <TestingPlatformDotnetTestSupport>true</TestingPlatformDotnetTestSupport>
+    <TUnitImplicitUsings>true</TUnitImplicitUsings>
+    <TUnitAssertionsImplicitUsings>true</TUnitAssertionsImplicitUsings>
+    <PublishAot>false</PublishAot>
+  </PropertyGroup>
+
+  <ItemGroup Condition="'$(IsTestProject)' == 'true'">
+    <PackageReference Include="TUnit" />
+    <PackageReference Include="Microsoft.Testing.Extensions.CodeCoverage" />
+    <PackageReference Include="NSubstitute" />
+    <None Include="$(MSBuildThisFileDirectory)testconfig.json" Condition="Exists('$(MSBuildThisFileDirectory)testconfig.json')">
+      <Link>$(AssemblyName).testconfig.json</Link>
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Include="$(MSBuildThisFileDirectory)..\LICENSE" Pack="true" PackagePath="\" Visible="false" />
+    <None Include="$(MSBuildThisFileDirectory)..\README.md" Pack="true" PackagePath="\" Visible="false" Condition="Exists('$(MSBuildThisFileDirectory)..\README.md')" />
+  </ItemGroup>
+
+  <ItemGroup Label="Analyzers">
+    <PackageReference Include="MinVer" PrivateAssets="all" />
+    <PackageReference Include="PublicApiSharp.Analyzers" PrivateAssets="all" />
+    <PackageReference Include="StyleSharp.Analyzers" PrivateAssets="all" />
+    <PackageReference Include="PerformanceSharp.Analyzers" PrivateAssets="all" />
+    <PackageReference Include="SecuritySharp.Analyzers" PrivateAssets="all" />
+  </ItemGroup>
+
+</Project>

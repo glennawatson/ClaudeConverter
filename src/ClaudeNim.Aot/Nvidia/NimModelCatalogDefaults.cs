@@ -1,0 +1,136 @@
+// Copyright (c) 2026 Glenn Watson and Contributors. All rights reserved.
+// Glenn Watson and Contributors licenses this file to you under the MIT license.
+// See the LICENSE file in the project root for full license information.
+namespace ClaudeNim.Aot.Nvidia;
+
+/// <summary>The NVIDIA-hosted models the proxy is known to work with, and the rules for excluding the ones it cannot serve.</summary>
+/// <remarks>
+/// <para>
+/// NVIDIA's free endpoints host far more than chat models: embedding, reranking, safety
+/// classification, speech, video and autonomous-driving models all appear in the same listing.
+/// None of them can answer a Messages API call, so advertising them gives a coding client a
+/// model picker full of entries that fail on selection.
+/// </para>
+/// <para>
+/// Only <see cref="Profiles"/> carries stated sizing, and only where NVIDIA documents it. Every
+/// other model is listed with the configured defaults instead of a guess.
+/// </para>
+/// </remarks>
+public static class NimModelCatalogDefaults
+{
+    /// <summary>The context window NVIDIA documents for the Nemotron 3 hybrid Mamba-Transformer models.</summary>
+    internal const int NemotronThreeContextWindow = 1_048_576;
+
+    /// <summary>The default maximum model length NVIDIA ships for the Nemotron 3 models.</summary>
+    internal const int NemotronThreeMaxOutputTokens = 262_144;
+
+    /// <summary>The model the proxy routes to when configuration names none.</summary>
+    internal const string RecommendedModel = "nvidia/nemotron-3-super-120b-a12b";
+
+    /// <summary>The profiles of NVIDIA NIM models the proxy has stated knowledge of.</summary>
+    private static readonly NimModelProfile[] KnownProfiles =
+    [
+        new(
+            "nvidia/nemotron-3-ultra-550b-a55b",
+            "Nemotron 3 Ultra 550B A55B",
+            SupportsTools: true,
+            SupportsVision: false,
+            SupportsThinking: true,
+            NemotronThreeContextWindow,
+            NemotronThreeMaxOutputTokens),
+        new(
+            "nvidia/nemotron-3-super-120b-a12b",
+            "Nemotron 3 Super 120B A12B",
+            SupportsTools: true,
+            SupportsVision: false,
+            SupportsThinking: true,
+            NemotronThreeContextWindow,
+            NemotronThreeMaxOutputTokens),
+        new("nvidia/nemotron-nano-3-30b-a3b", "Nemotron Nano 3 30B A3B", true, false, true),
+        new("nvidia/nemotron-3.5-lightning-30b-a3b", "Nemotron 3.5 Lightning 30B A3B", true, false, true),
+        new(
+            "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning",
+            "Nemotron 3 Nano Omni 30B A3B Reasoning",
+            SupportsTools: true,
+            SupportsVision: true,
+            SupportsThinking: true),
+        new("nvidia/llama-3.1-nemotron-ultra-253b-v1", "Llama 3.1 Nemotron Ultra 253B v1", true, false, true),
+        new("z-ai/glm-5.3", "GLM 5.3", true, false, true),
+        new("z-ai/glm-5.3-flash", "GLM 5.3 Flash", true, true, true),
+        new("moonshotai/kimi-k3", "Kimi K3", true, true, true),
+        new("moonshotai/kimi-k2.6", "Kimi K2.6", true, true, true),
+        new("deepseek-ai/deepseek-coder-6.7b-instruct", "DeepSeek Coder 6.7B Instruct", true, false, false),
+        new("meta/muse-glimmer-30b", "Muse Glimmer 30B", true, true, true),
+        new("poolside/laguna-xs-2.1", "Laguna XS 2.1", true, false, true),
+        new("google/gemma-4-31b-it", "Gemma 4 31B IT", true, false, false),
+        new("openai/gpt-oss-20b", "GPT-OSS 20B", true, false, true),
+        new("mistralai/mistral-nemotron", "Mistral Nemotron", true, false, false),
+    ];
+
+    // Substrings that identify a model serving something other than chat completions. Matched
+    // against the lower-cased identifier.
+    /// <summary>The substrings that identify non-chat models to exclude from the listing.</summary>
+    private static readonly string[] NonChatMarkers =
+    [
+        "embed", "rerank", "retriever", "reward", "bge-", "gliner",
+        "guard", "safety", "jailbreak", "content-safety", "topic-control",
+        "tts", "asr", "voicechat", "magpie", "studio-voice", "noise",
+        "cosmos", "video", "detector", "streampetr", "bevformer", "sparsedrive",
+        "translate", "paligemma", "parse", "ocr", "clip", "calibration", "kumo",
+    ];
+
+    /// <summary>Gets the models the proxy has stated knowledge of.</summary>
+    /// <returns>The known profiles.</returns>
+    public static ReadOnlySpan<NimModelProfile> Profiles => KnownProfiles;
+
+    /// <summary>Finds the stated profile for a model identifier.</summary>
+    /// <param name="id">The NIM model identifier.</param>
+    /// <returns>The profile, or <see langword="null"/> when the model is not a known one.</returns>
+    public static NimModelProfile? FindProfile(string id)
+    {
+        for (var i = 0; i < KnownProfiles.Length; i++)
+        {
+            if (string.Equals(KnownProfiles[i].Id, id, StringComparison.OrdinalIgnoreCase))
+            {
+                return KnownProfiles[i];
+            }
+        }
+
+        return null;
+    }
+
+    /// <summary>Decides whether a model identifier names something that can answer a chat completion.</summary>
+    /// <param name="id">The NIM model identifier.</param>
+    /// <returns><see langword="true"/> when the model should be advertised.</returns>
+    public static bool IsChatModel(string id)
+    {
+        if (string.IsNullOrEmpty(id))
+        {
+            return false;
+        }
+
+        if (FindProfile(id) is not null)
+        {
+            return true;
+        }
+
+        for (var i = 0; i < NonChatMarkers.Length; i++)
+        {
+            if (id.Contains(NonChatMarkers[i], StringComparison.OrdinalIgnoreCase))
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    /// <summary>Derives a readable name from a model identifier that has no stated profile.</summary>
+    /// <param name="id">The NIM model identifier.</param>
+    /// <returns>The trailing segment of the identifier, or the identifier itself.</returns>
+    public static string DeriveDisplayName(string id)
+    {
+        var slash = id.LastIndexOf('/');
+        return slash >= 0 && slash < id.Length - 1 ? id[(slash + 1)..] : id;
+    }
+}

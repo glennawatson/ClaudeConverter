@@ -1,0 +1,31 @@
+<Project>
+
+  <PropertyGroup>
+    <ManagePackageVersionsCentrally>true</ManagePackageVersionsCentrally>
+    <CentralPackageTransitivePinningEnabled>true</CentralPackageTransitivePinningEnabled>
+  </PropertyGroup>
+
+  <ItemGroup Label="Analyzers">
+    <PackageVersion Include="PerformanceSharp.Analyzers" Version="5.1.2" />
+    <PackageVersion Include="PublicApiSharp.Analyzers" Version="2.0.1" />
+    <PackageVersion Include="SecuritySharp.Analyzers" Version="5.1.2" />
+    <PackageVersion Include="StyleSharp.Analyzers" Version="5.1.2" />
+  </ItemGroup>
+
+  <ItemGroup Label="Http">
+    <PackageVersion Include="Refit" Version="16.1.0" />
+    <PackageVersion Include="Refit.HttpClientFactory" Version="16.1.0" />
+  </ItemGroup>
+
+  <ItemGroup Label="Versioning">
+    <PackageVersion Include="MinVer" Version="8.0.0" />
+  </ItemGroup>
+
+  <ItemGroup Label="Testing">
+    <PackageVersion Include="Microsoft.AspNetCore.Mvc.Testing" Version="10.0.0" />
+    <PackageVersion Include="Microsoft.Testing.Extensions.CodeCoverage" Version="18.11.2" />
+    <PackageVersion Include="NSubstitute" Version="6.2.0" />
+    <PackageVersion Include="TUnit" Version="1.68.17" />
+  </ItemGroup>
+
+</Project>

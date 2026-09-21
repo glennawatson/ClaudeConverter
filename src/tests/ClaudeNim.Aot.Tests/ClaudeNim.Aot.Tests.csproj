@@ -1,0 +1,14 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <AssemblyName>ClaudeNim.Aot.Tests</AssemblyName>
+    <RootNamespace>ClaudeNim.Aot.Tests</RootNamespace>
+    <TargetFrameworks>net10.0;net11.0</TargetFrameworks>
+    <IsTestProject>true</IsTestProject>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\ClaudeNim.Aot\ClaudeNim.Aot.csproj" />
+  </ItemGroup>
+
+</Project>

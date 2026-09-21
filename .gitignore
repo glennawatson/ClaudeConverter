@@ -1,0 +1,47 @@
+# Build outputs
+bin/
+obj/
+*.nupkg
+*.snupkg
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Test results
+TestResults/
+*.trx
+*.xml
+coverage/
+
+# NuGet
+packages/
+.nuget/
+
+# MinVer
+*.version.json
+
+# AOT publish
+*.dll
+*.pdb
+*.so
+*.dylib
+*.exe
+!*.cs
+
+# BenchmarkDotNet
+BenchmarkDotNet.Artifacts/
+
+# MinVer
+*.version.json
+
+# Logs
+*.log
+logs/
