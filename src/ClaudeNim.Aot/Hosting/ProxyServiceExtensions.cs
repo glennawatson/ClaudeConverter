@@ -8,6 +8,7 @@ using ClaudeNim.Aot.Nvidia;
 using ClaudeNim.Aot.RateLimiting;
 using ClaudeNim.Aot.Routing;
 using ClaudeNim.Aot.Serialization;
+using Microsoft.AspNetCore.Http.Json;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Refit;
@@ -124,6 +125,19 @@ public static class ProxyServiceExtensions
 
             return services;
         }
+    }
+
+    /// <summary>Points minimal API's own JSON serialization at the proxy's generated context.</summary>
+    /// <param name="options">The JSON options minimal API resolves request and response bodies through.</param>
+    /// <remarks>
+    /// The slim builder's JSON options default to reflection. Inserting the generated context ahead
+    /// of the default resolver chain is what lets minimal API's own serialization run under native
+    /// AOT, where <c>JsonSerializerIsReflectionEnabledByDefault</c> is off.
+    /// </remarks>
+    public static void ConfigureJsonSerialization(JsonOptions options)
+    {
+        ArgumentNullException.ThrowIfNull(options);
+        options.SerializerOptions.TypeInfoResolverChain.Insert(0, ProxyJsonContext.Default);
     }
 
     /// <summary>Builds the settings the generated transport resolves and serializes with.</summary>

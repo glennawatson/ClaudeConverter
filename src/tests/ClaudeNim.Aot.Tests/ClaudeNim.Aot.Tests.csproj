@@ -11,4 +11,8 @@
     <ProjectReference Include="..\..\ClaudeNim.Aot\ClaudeNim.Aot.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <PackageReference Include="Refit.Testing" />
+  </ItemGroup>
+
 </Project>

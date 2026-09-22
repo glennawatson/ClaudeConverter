@@ -109,20 +109,26 @@ public static class EnvironmentConfigurationExtensions
     }
 
     /// <summary>Reads every flat environment name that is set.</summary>
-    /// <returns>The configuration entries the set names produce.</returns>
+    /// <returns>The configuration entries the set names produce, the later alias of a group winning.</returns>
+    /// <remarks>
+    /// <see cref="Microsoft.Extensions.Configuration.Memory.MemoryConfigurationProvider"/> rejects a
+    /// duplicate key outright, so a deployment that sets both aliases of one group (for example
+    /// <c>NVIDIA_API_KEY</c> and <c>NVIDIA_NIM_API_KEY</c> together) needs the later entry to
+    /// overwrite the earlier one here rather than being handed to it as two entries for one key.
+    /// </remarks>
     private static List<KeyValuePair<string, string?>> ReadFlatNames()
     {
-        var entries = new List<KeyValuePair<string, string?>>(FlatNames.Length);
+        var byKey = new Dictionary<string, string?>(FlatNames.Length, StringComparer.Ordinal);
 
         foreach (var (variable, key) in FlatNames)
         {
             var value = Environment.GetEnvironmentVariable(variable);
             if (!string.IsNullOrEmpty(value))
             {
-                entries.Add(new(key, value));
+                byKey[key] = value;
             }
         }
 
-        return entries;
+        return [.. byKey];
     }
 }

@@ -79,7 +79,10 @@ public static class ToolSchemaSanitizer
     {
         foreach (var property in element.EnumerateObject())
         {
-            if (IsSchemaBearingKey(property.Name) && IsBoolean(property.Value))
+            // A schema-bearing key's value counts whether the boolean is the value itself (a
+            // subschema such as "items") or one entry of the list or map of subschemas it
+            // introduces (such as "allOf" or "properties") — the writer strips both shapes.
+            if (IsSchemaBearingKey(property.Name) && ValueOrEntryIsBoolean(property.Value))
             {
                 return true;
             }
@@ -87,6 +90,41 @@ public static class ToolSchemaSanitizer
             if (ContainsBooleanSubschema(property.Value))
             {
                 return true;
+            }
+        }
+
+        return false;
+    }
+
+    /// <summary>Checks whether a schema-bearing value is itself boolean, or holds a boolean entry.</summary>
+    /// <param name="value">The value of a schema-bearing key.</param>
+    /// <returns>True if the value or one of its immediate entries is a boolean subschema.</returns>
+    private static bool ValueOrEntryIsBoolean(JsonElement value)
+    {
+        if (IsBoolean(value))
+        {
+            return true;
+        }
+
+        if (value.ValueKind == JsonValueKind.Array)
+        {
+            foreach (var item in value.EnumerateArray())
+            {
+                if (IsBoolean(item))
+                {
+                    return true;
+                }
+            }
+        }
+
+        if (value.ValueKind == JsonValueKind.Object)
+        {
+            foreach (var entry in value.EnumerateObject())
+            {
+                if (IsBoolean(entry.Value))
+                {
+                    return true;
+                }
             }
         }
 

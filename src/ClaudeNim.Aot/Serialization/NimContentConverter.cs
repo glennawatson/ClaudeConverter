@@ -16,10 +16,22 @@ namespace ClaudeNim.Aot.Serialization;
 public sealed class NimContentConverter : JsonConverter<NimContent>
 {
     /// <inheritdoc/>
-    public override NimContent Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options) =>
-        reader.TokenType == JsonTokenType.String
-            ? NimContent.FromText(reader.GetString() ?? string.Empty)
-            : NimContent.FromText(string.Empty);
+    /// <remarks>
+    /// This proxy only ever writes <see cref="NimContent"/>; nothing reads a NIM request body
+    /// back. A non-string shape is still skipped rather than left half-read, since
+    /// <see cref="System.Text.Json"/> requires a converter to consume exactly the tokens of the
+    /// value it was asked to read, or the whole surrounding read fails.
+    /// </remarks>
+    public override NimContent Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)
+    {
+        if (reader.TokenType == JsonTokenType.String)
+        {
+            return NimContent.FromText(reader.GetString() ?? string.Empty);
+        }
+
+        reader.Skip();
+        return NimContent.FromText(string.Empty);
+    }
 
     /// <inheritdoc/>
     public override void Write(Utf8JsonWriter writer, NimContent value, JsonSerializerOptions options)

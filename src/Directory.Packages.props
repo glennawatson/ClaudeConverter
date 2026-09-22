@@ -15,6 +15,7 @@
   <ItemGroup Label="Http">
     <PackageVersion Include="Refit" Version="16.1.0" />
     <PackageVersion Include="Refit.HttpClientFactory" Version="16.1.0" />
+    <PackageVersion Include="Refit.Testing" Version="16.1.0" />
   </ItemGroup>
 
   <ItemGroup Label="Benchmarking">
