@@ -301,7 +301,7 @@ public static class MessagesEndpointExtensions
         response.Headers.Connection = "keep-alive";
 
         // The headers have to reach the client before the first event, or the client waits.
-        await response.Body.FlushAsync().ConfigureAwait(false);
+        await response.Body.FlushAsync(context.RequestAborted).ConfigureAwait(false);
 
         return new(response.Body);
     }

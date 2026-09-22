@@ -51,7 +51,7 @@ public static class FilePathExtraction
 
     /// <summary>The separators a command name may be qualified by.</summary>
     private static readonly System.Buffers.SearchValues<char> PathSeparators =
-        System.Buffers.SearchValues.Create(['/', '\\']);
+        System.Buffers.SearchValues.Create("/\\");
 
     /// <summary>Extracts the paths a command read.</summary>
     /// <param name="command">The command being asked about.</param>

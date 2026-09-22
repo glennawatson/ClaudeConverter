@@ -74,7 +74,6 @@
   <ItemGroup Condition="'$(IsTestProject)' == 'true'">
     <PackageReference Include="TUnit" />
     <PackageReference Include="Microsoft.Testing.Extensions.CodeCoverage" />
-    <PackageReference Include="NSubstitute" />
     <None Include="$(MSBuildThisFileDirectory)testconfig.json" Condition="Exists('$(MSBuildThisFileDirectory)testconfig.json')">
       <Link>$(AssemblyName).testconfig.json</Link>
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>

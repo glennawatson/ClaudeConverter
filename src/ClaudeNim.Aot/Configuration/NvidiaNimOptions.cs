@@ -43,5 +43,9 @@ public sealed record NvidiaNimOptions(
     internal const string SectionName = "NvidiaNim";
 
     /// <summary>The public NVIDIA-hosted endpoint used when no base address is configured.</summary>
+    [System.Diagnostics.CodeAnalysis.SuppressMessage(
+        "Major Code Smell",
+        "S1075:Refactor your code not to use hardcoded absolute paths or URIs",
+        Justification = "This is the documented default upstream, not a path that varies by deployment; it is overridable via configuration.")]
     internal const string DefaultBaseUrl = "https://integrate.api.nvidia.com/v1";
 }

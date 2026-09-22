@@ -109,10 +109,13 @@ public static class EmbeddedToolCallSyntax
 
         var split = body.IndexOf(separator, StringComparison.Ordinal);
         var name = (split < 0 ? body : body[..split]).Trim();
+        if (name.Length == 0)
+        {
+            return null;
+        }
 
-        return name.Length == 0
-            ? null
-            : EmbeddedToolCall.ForCall(name, Unfence(split < 0 ? string.Empty : body[(split + separator.Length)..]));
+        var arguments = split < 0 ? string.Empty : body[(split + separator.Length)..];
+        return EmbeddedToolCall.ForCall(name, Unfence(arguments));
     }
 
     /// <summary>Removes the markers that bracket a run of calls without carrying anything.</summary>
