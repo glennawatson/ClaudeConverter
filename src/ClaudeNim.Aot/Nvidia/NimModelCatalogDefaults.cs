@@ -107,6 +107,19 @@ public static class NimModelCatalogDefaults
     /// </remarks>
     public static bool SupportsVision(string id) => FindProfile(id)?.SupportsVision ?? false;
 
+    /// <summary>Decides whether a model produces a reasoning trace at all.</summary>
+    /// <param name="id">The NIM model identifier.</param>
+    /// <returns><see langword="true"/> when the model may return reasoning.</returns>
+    /// <remarks>
+    /// This gates the streamed reader's handling of a chat template that opens the reasoning block
+    /// itself, and so cannot be read from the caller's reasoning setting alone: the GLM 5.3
+    /// template seeds the tag unconditionally and never reads <c>enable_thinking</c>, so a turn
+    /// that asked for no reasoning still comes back with a trace and a closing tag in the content.
+    /// A model the proxy has no stated knowledge of is treated as producing none, matching the
+    /// listing.
+    /// </remarks>
+    public static bool SupportsThinking(string id) => FindProfile(id)?.SupportsThinking ?? false;
+
     /// <summary>Decides whether a model identifier names something that can answer a chat completion.</summary>
     /// <param name="id">The NIM model identifier.</param>
     /// <returns><see langword="true"/> when the model should be advertised.</returns>

@@ -15,6 +15,10 @@ namespace ClaudeNim.Aot.Nvidia;
 /// <summary>Turns a streamed NVIDIA NIM completion into the Anthropic event stream.</summary>
 /// <param name="writer">The writer the Anthropic events are emitted through.</param>
 /// <param name="thinkingEnabled">Whether reasoning should be forwarded to the client.</param>
+/// <param name="reasoningMayBeSeeded">
+/// Whether the model's chat template may open the reasoning block itself, so that the completion
+/// begins inside it and carries only a closing tag.
+/// </param>
 /// <param name="idleTimeout">How long the upstream may produce nothing before the turn is abandoned.</param>
 /// <param name="logger">The diagnostic log.</param>
 /// <remarks>
@@ -32,6 +36,7 @@ namespace ClaudeNim.Aot.Nvidia;
 public sealed class NimStreamTranslator(
     AnthropicSseWriter writer,
     bool thinkingEnabled,
+    bool reasoningMayBeSeeded,
     TimeSpan idleTimeout,
     ILogger logger)
 {
@@ -48,7 +53,7 @@ public sealed class NimStreamTranslator(
     private const int LoggedPayloadLength = 400;
 
     /// <summary>The splitter that lifts inline reasoning tags out of streamed answer text.</summary>
-    private readonly ThinkTagParser _thinkParser = new();
+    private readonly ThinkTagParser _thinkParser = new(reasoningMayBeSeeded);
 
     /// <summary>The scratch list each parsed run of text is split into, reused across deltas.</summary>
     private readonly List<ThinkTagSegment> _segments = [];
@@ -313,6 +318,7 @@ public sealed class NimStreamTranslator(
 
         if (delta.ReasoningContent is { Length: > 0 } reasoning)
         {
+            await ReleaseSeededHoldAsync(cancellationToken).ConfigureAwait(false);
             await AppendReasoningAsync(reasoning, cancellationToken).ConfigureAwait(false);
         }
 
@@ -337,6 +343,20 @@ public sealed class NimStreamTranslator(
     {
         _segments.Clear();
         _thinkParser.Feed(content, _segments);
+        await EmitSegmentsAsync(cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>Releases text held back in case the chat template had seeded a reasoning block.</summary>
+    /// <param name="cancellationToken">Abandons the translation when the client disconnects.</param>
+    /// <returns>A task that completes once any released text has been emitted.</returns>
+    /// <remarks>
+    /// A model reporting reasoning on its own field is not one that seeds an inline tag, so the
+    /// wait can end the moment the first such delta arrives rather than on the holdback limit.
+    /// </remarks>
+    private async ValueTask ReleaseSeededHoldAsync(CancellationToken cancellationToken)
+    {
+        _segments.Clear();
+        _thinkParser.NoteExplicitReasoning(_segments);
         await EmitSegmentsAsync(cancellationToken).ConfigureAwait(false);
     }
 

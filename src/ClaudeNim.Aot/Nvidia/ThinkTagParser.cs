@@ -6,6 +6,11 @@ using System.Text;
 namespace ClaudeNim.Aot.Nvidia;
 
 /// <summary>Separates inline <c>&lt;think&gt;</c> reasoning from answer text in a streamed response.</summary>
+/// <param name="ReasoningMayBeSeeded">
+/// Whether the chat template may have opened the reasoning block itself, so that the completion
+/// begins inside it and carries only a closing tag. Pass the turn's reasoning setting: a template
+/// only seeds the tag when reasoning was asked for.
+/// </param>
 /// <remarks>
 /// <para>
 /// NVIDIA's Nemotron models return reasoning in a dedicated <c>reasoning_content</c> delta, but
@@ -23,7 +28,7 @@ namespace ClaudeNim.Aot.Nvidia;
 /// </para>
 /// </remarks>
 [System.Diagnostics.DebuggerDisplay("ThinkTagParser: {_buffer}")]
-public sealed record ThinkTagParser
+public sealed record ThinkTagParser(bool ReasoningMayBeSeeded = false)
 {
     /// <summary>The opening <c>&lt;think&gt;</c> tag.</summary>
     private const string OpenTag = "<think>";
@@ -38,6 +43,16 @@ public sealed record ThinkTagParser
     /// otherwise have the rest of its reply eaten as a reasoning trace that never closes.
     /// </remarks>
     private const int LiteralTagThreshold = 200;
+
+    /// <summary>How much content is held back while waiting for a seeded reasoning block to close.</summary>
+    /// <remarks>
+    /// Nothing in the stream distinguishes a seeded reasoning trace from an ordinary answer until
+    /// the closing tag arrives, and the two must not be confused: answer text delivered as
+    /// reasoning is an empty turn to the client. So the opening run is held rather than guessed at,
+    /// and released as answer text once it grows past the point where a reasoning trace would
+    /// plausibly still be running. Being wrong costs a delay; guessing costs the turn.
+    /// </remarks>
+    private const int SeededReasoningHoldback = 2048;
 
     /// <summary>The buffer holding partially parsed content between chunk boundaries.</summary>
     private readonly StringBuilder _buffer = new();
@@ -57,6 +72,35 @@ public sealed record ThinkTagParser
     /// both the reasoning prose and the literal tag leak into the answer as plain text.
     /// </remarks>
     private bool _sawAnyTag;
+
+    /// <summary>Tracks whether the opening run is still being held for a seeded closing tag.</summary>
+    private bool _awaitingSeededClose = ReasoningMayBeSeeded;
+
+    /// <summary>Tracks whether a seeded reasoning block was expected but never closed in time.</summary>
+    /// <remarks>
+    /// The prose has already gone out as answer text by then and cannot be taken back, but the
+    /// closing tag itself has not. Dropping it keeps a raw <c>&lt;/think&gt;</c> out of the reply.
+    /// </remarks>
+    private bool _missedSeededClose;
+
+    /// <summary>Records that the model reports reasoning on its own field rather than inline.</summary>
+    /// <param name="segments">The list any released runs are appended to.</param>
+    /// <remarks>
+    /// A model using <c>reasoning_content</c> never seeds an inline tag, so there is nothing left to
+    /// wait for: whatever is being held is answer text and should go out now.
+    /// </remarks>
+    public void NoteExplicitReasoning(List<ThinkTagSegment> segments)
+    {
+        ArgumentNullException.ThrowIfNull(segments);
+
+        if (!_awaitingSeededClose)
+        {
+            return;
+        }
+
+        _awaitingSeededClose = false;
+        Feed(string.Empty, segments);
+    }
 
     /// <summary>Consumes a chunk of model output and appends any completed runs.</summary>
     /// <param name="chunk">The incoming content fragment.</param>
@@ -82,6 +126,10 @@ public sealed record ThinkTagParser
     public void Flush(List<ThinkTagSegment> segments)
     {
         ArgumentNullException.ThrowIfNull(segments);
+
+        // Whatever is still held never closed, so it was answer text after all.
+        _awaitingSeededClose = false;
+        _missedSeededClose = false;
 
         if (_buffer.Length <= 0)
         {
@@ -159,6 +207,22 @@ public sealed record ThinkTagParser
     {
         var text = _buffer.ToString();
 
+        if (_awaitingSeededClose)
+        {
+            return ConsumeAwaitingSeededClose(text, segments);
+        }
+
+        return _missedSeededClose
+            ? ConsumeDroppingSeededClose(text, segments)
+            : ConsumeTagged(text, segments);
+    }
+
+    /// <summary>Resolves the buffer against the tag the parser is currently looking for.</summary>
+    /// <param name="text">The buffered text.</param>
+    /// <param name="segments">The list completed runs are appended to.</param>
+    /// <returns><see langword="true"/> when the buffer may still hold another resolvable run.</returns>
+    private bool ConsumeTagged(string text, List<ThinkTagSegment> segments)
+    {
         if (TryFlushPastThreshold(text, 0, segments))
         {
             return false;
@@ -214,6 +278,83 @@ public sealed record ThinkTagParser
         Emit(segments, text);
         _ = _buffer.Clear();
         return true;
+    }
+
+    /// <summary>Holds the opening run back until a seeded reasoning block resolves one way or the other.</summary>
+    /// <param name="text">The buffered text.</param>
+    /// <param name="segments">The list completed runs are appended to.</param>
+    /// <returns><see langword="true"/> when the buffer may still hold another resolvable run.</returns>
+    /// <remarks>
+    /// Holding is what makes the seeded case work at all on a streamed turn. Emitting each chunk as
+    /// it lands classifies the reasoning as answer text long before the closing tag arrives, and by
+    /// then the literal-tag threshold has been passed and the tag itself leaks too — which is the
+    /// live defect this guards against.
+    /// </remarks>
+    private bool ConsumeAwaitingSeededClose(string text, List<ThinkTagSegment> segments)
+    {
+        var openIndex = text.IndexOf(OpenTag, StringComparison.Ordinal);
+        var closeIndex = text.IndexOf(CloseTag, StringComparison.Ordinal);
+
+        if (openIndex >= 0 && (closeIndex < 0 || openIndex < closeIndex))
+        {
+            // The model writes its own tags, so there was no seeded block to wait for.
+            _awaitingSeededClose = false;
+            return true;
+        }
+
+        if (closeIndex >= 0)
+        {
+            _insideThink = true;
+            Emit(segments, text[..closeIndex]);
+            _insideThink = false;
+            _ = _buffer.Remove(0, closeIndex + CloseTag.Length);
+            _awaitingSeededClose = false;
+            _sawAnyTag = true;
+            return true;
+        }
+
+        if (CountVisible(text) < SeededReasoningHoldback)
+        {
+            return false;
+        }
+
+        _awaitingSeededClose = false;
+        _missedSeededClose = true;
+        return true;
+    }
+
+    /// <summary>Streams the answer normally while still swallowing a late seeded closing tag.</summary>
+    /// <param name="text">The buffered text.</param>
+    /// <param name="segments">The list completed runs are appended to.</param>
+    /// <returns><see langword="true"/> when the buffer may still hold another resolvable run.</returns>
+    private bool ConsumeDroppingSeededClose(string text, List<ThinkTagSegment> segments)
+    {
+        var openIndex = text.IndexOf(OpenTag, StringComparison.Ordinal);
+        var closeIndex = text.IndexOf(CloseTag, StringComparison.Ordinal);
+
+        if (openIndex >= 0 && (closeIndex < 0 || openIndex < closeIndex))
+        {
+            _missedSeededClose = false;
+            return true;
+        }
+
+        if (closeIndex >= 0)
+        {
+            Emit(segments, text[..closeIndex]);
+            _ = _buffer.Remove(0, closeIndex + CloseTag.Length);
+            _missedSeededClose = false;
+            _sawAnyTag = true;
+            return true;
+        }
+
+        var safe = Math.Min(SafeLength(text, OpenTag), SafeLength(text, CloseTag));
+        if (safe > 0)
+        {
+            Emit(segments, text[..safe]);
+            _ = _buffer.Remove(0, safe);
+        }
+
+        return false;
     }
 
     /// <summary>Handles a closing tag reached before any opening tag has ever been seen.</summary>

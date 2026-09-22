@@ -229,15 +229,50 @@ public sealed class NimStreamTranslatorTests
         await Assert.That(body).Contains("\"text\":\"hi\"");
     }
 
+    /// <summary>A seeded reasoning block streamed in fragments reaches the client as thinking, not answer text.</summary>
+    /// <returns>A task that completes when the assertions have run.</returns>
+    /// <remarks>
+    /// NVIDIA documents this shape: without the reasoning parser configured upstream, "the
+    /// reasoning text and the <c>&lt;/think&gt;</c> marker appear in content instead". The GLM 5.3
+    /// template seeds the opening tag unconditionally, so the completion carries only the close.
+    /// </remarks>
+    [Test]
+    public async Task SeededReasoningInContentBecomesAThinkingBlock()
+    {
+        const string Sse = """
+            data: {"choices":[{"delta":{"content":"weighing "}}]}
+
+            data: {"choices":[{"delta":{"content":"it up</think>the answer"}}]}
+
+            data: [DONE]
+
+            """;
+
+        var body = await TranslateAsync(Sse, reasoningMayBeSeeded: true);
+
+        await Assert.That(body).Contains("\"thinking\":\"weighing it up\"");
+        await Assert.That(body).Contains("\"text\":\"the answer\"");
+        await Assert.That(body).DoesNotContain("</think>");
+    }
+
     /// <summary>Runs the translator over a raw SSE body and returns the framed Anthropic output as text.</summary>
     /// <param name="upstreamSse">The upstream server-sent event body to feed the translator.</param>
     /// <param name="thinkingEnabled">Whether reasoning should be forwarded.</param>
+    /// <param name="reasoningMayBeSeeded">Whether the chat template may have opened the reasoning block itself.</param>
     /// <returns>The UTF-8 text written to the Anthropic response body.</returns>
-    private static async Task<string> TranslateAsync(string upstreamSse, bool thinkingEnabled = true)
+    private static async Task<string> TranslateAsync(
+        string upstreamSse,
+        bool thinkingEnabled = true,
+        bool reasoningMayBeSeeded = false)
     {
         await using var output = new MemoryStream();
         var writer = new AnthropicSseWriter(output);
-        var translator = new NimStreamTranslator(writer, thinkingEnabled, IdleTimeout, NullLogger.Instance);
+        var translator = new NimStreamTranslator(
+            writer,
+            thinkingEnabled,
+            reasoningMayBeSeeded,
+            IdleTimeout,
+            NullLogger.Instance);
 
         await using var upstream = new MemoryStream(Encoding.UTF8.GetBytes(upstreamSse));
         await translator.TranslateAsync(upstream, "msg_1", "claude-sonnet-5", InputTokens, CancellationToken.None);

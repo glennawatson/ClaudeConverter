@@ -68,7 +68,7 @@ public sealed class EmbeddedToolCallParser
     /// <param name="text">The text to append.</param>
     private static void EmitText(List<EmbeddedToolCall> runs, string text)
     {
-        var cleaned = EmbeddedToolCallSyntax.StripNoise(text);
+        var cleaned = ControlMarkers.Strip(text);
 
         if (cleaned.Length > 0)
         {
@@ -83,6 +83,12 @@ public sealed class EmbeddedToolCallParser
     {
         var text = _buffer.ToString();
         var opening = EmbeddedToolCallSyntax.FindOpening(text);
+        var named = NamedToolCallSyntax.FindOpening(text);
+
+        if (named.Index >= 0 && (opening.Index < 0 || named.Index < opening.Index))
+        {
+            return StepNamed(runs, text, named.Index, named.Form);
+        }
 
         if (opening.Index < 0)
         {
@@ -110,13 +116,42 @@ public sealed class EmbeddedToolCallParser
         return true;
     }
 
+    /// <summary>Consumes one call written in the shape that names each argument with its own tag.</summary>
+    /// <param name="runs">The list completed runs are appended to.</param>
+    /// <param name="text">The buffered text.</param>
+    /// <param name="index">Where the call opens.</param>
+    /// <param name="form">The spelling the call was written in.</param>
+    /// <returns><see langword="true"/> when more of the buffer may still be consumable.</returns>
+    private bool StepNamed(List<EmbeddedToolCall> runs, string text, int index, in NamedCallForm form)
+    {
+        EmitText(runs, text[..index]);
+
+        var body = text[(index + form.CallOpen.Length)..];
+        var close = body.IndexOf(form.CallClose, StringComparison.Ordinal);
+
+        if (close < 0)
+        {
+            // The call has started but not finished; hold it until the rest arrives.
+            _ = _buffer.Remove(0, index);
+            return false;
+        }
+
+        if (NamedToolCallSyntax.ReadCall(body[..close], form) is { } call)
+        {
+            runs.Add(call);
+        }
+
+        _ = _buffer.Remove(0, index + form.CallOpen.Length + close + form.CallClose.Length);
+        return true;
+    }
+
     /// <summary>Releases the text that cannot be the start of a marker.</summary>
     /// <param name="runs">The list completed runs are appended to.</param>
     /// <param name="text">The buffered text.</param>
     /// <returns><see langword="false"/>, because nothing further can be resolved yet.</returns>
     private bool ReleaseSafePrefix(List<EmbeddedToolCall> runs, string text)
     {
-        var safe = EmbeddedToolCallSyntax.SafeLength(text);
+        var safe = Math.Min(EmbeddedToolCallSyntax.SafeLength(text), NamedToolCallSyntax.SafeLength(text));
 
         if (safe > 0)
         {

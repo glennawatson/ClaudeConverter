@@ -37,6 +37,9 @@ public sealed class NimRequestBuilderTests
     /// <summary>The user text used by the minimal fixture requests.</summary>
     private const string UserText = "hello";
 
+    /// <summary>The structured-output discriminator, and the member the schema nests under.</summary>
+    private const string JsonSchema = "json_schema";
+
     /// <summary>The settings a request is built against.</summary>
     private static readonly NvidiaNimOptions Options = new();
 
@@ -186,9 +189,27 @@ public sealed class NimRequestBuilderTests
 
         var format = built.ResponseFormat;
         await Assert.That(format).IsNotNull();
-        await Assert.That(format!.Value.GetProperty("type").GetString()).IsEqualTo("json_schema");
-        await Assert.That(format.Value.GetProperty("json_schema").GetProperty("schema").GetProperty("type").GetString())
+        await Assert.That(format!.Value.GetProperty("type").GetString()).IsEqualTo(JsonSchema);
+        await Assert.That(format.Value.GetProperty(JsonSchema).GetProperty("schema").GetProperty("type").GetString())
             .IsEqualTo("object");
+    }
+
+    /// <summary>A structured-output request names its schema, which NIM requires.</summary>
+    /// <returns>A task that completes when the assertions have run.</returns>
+    /// <remarks>
+    /// This is a regression test for a live defect: the schema was forwarded on its own, and NIM
+    /// rejected every structured-output turn with <c>missing field `name`</c> before the model was
+    /// reached. Claude Code asks for structured output on its internal evaluator calls, so the
+    /// failure surfaced as hook and goal checks erroring out rather than as a model problem.
+    /// </remarks>
+    [Test]
+    public async Task StructuredOutputCarriesASchemaName()
+    {
+        var built = NimRequestBuilder.Build(RequestWithFormat(), UpstreamModel, false, Options);
+
+        var schema = built.ResponseFormat!.Value.GetProperty(JsonSchema);
+        await Assert.That(schema.TryGetProperty("name", out var name)).IsTrue();
+        await Assert.That(name.GetString()).IsNotNullOrEmpty();
     }
 
     /// <summary>A request with no output format carries no <c>response_format</c>.</summary>

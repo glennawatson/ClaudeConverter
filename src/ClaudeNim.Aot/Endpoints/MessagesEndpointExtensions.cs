@@ -276,7 +276,17 @@ public static class MessagesEndpointExtensions
     {
         var writer = await BeginStreamAsync(context).ConfigureAwait(false);
         var idleTimeout = TimeSpan.FromSeconds(services.Timeouts.StreamIdleSeconds);
-        var translator = new NimStreamTranslator(writer, resolved.ThinkingEnabled, idleTimeout, services.Logger);
+
+        // A reasoning model may have had its opening <think> written by the chat template rather
+        // than by itself, whatever this turn asked for: the GLM 5.3 template seeds it
+        // unconditionally and never reads enable_thinking.
+        var seeded = resolved.ThinkingEnabled || NimModelCatalogDefaults.SupportsThinking(resolved.NimModel);
+        var translator = new NimStreamTranslator(
+            writer,
+            resolved.ThinkingEnabled,
+            seeded,
+            idleTimeout,
+            services.Logger);
 
         Stream upstream;
         try

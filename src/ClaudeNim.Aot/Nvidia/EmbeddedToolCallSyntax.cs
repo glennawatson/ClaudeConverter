@@ -38,17 +38,6 @@ public static class EmbeddedToolCallSyntax
     /// <summary>The fence some templates wrap the arguments in.</summary>
     private const string Fence = "```";
 
-    /// <summary>The markers that merely bracket a run of calls and carry nothing themselves.</summary>
-    private static readonly string[] NoiseMarkers =
-    [
-        "<｜tool▁calls▁begin｜>",
-        "<｜tool▁calls▁end｜>",
-        "<|tool_calls_begin|>",
-        "<|tool_calls_end|>",
-        "<｜DSML｜>",
-        "<|DSML|>",
-    ];
-
     /// <summary>The opening tokens, each paired with the separator and terminator that follow it.</summary>
     private static readonly (string Open, string Separator, string Close)[] Forms =
     [
@@ -84,16 +73,11 @@ public static class EmbeddedToolCallSyntax
     {
         ArgumentNullException.ThrowIfNull(text);
 
-        var safe = text.Length;
+        var safe = ControlMarkers.SafeLength(text);
 
         foreach (var (open, _, _) in Forms)
         {
             safe = Math.Min(safe, SafeLength(text, open));
-        }
-
-        foreach (var marker in NoiseMarkers)
-        {
-            safe = Math.Min(safe, SafeLength(text, marker));
         }
 
         return safe;
@@ -116,22 +100,6 @@ public static class EmbeddedToolCallSyntax
 
         var arguments = split < 0 ? string.Empty : body[(split + separator.Length)..];
         return EmbeddedToolCall.ForCall(name, Unfence(arguments));
-    }
-
-    /// <summary>Removes the markers that bracket a run of calls without carrying anything.</summary>
-    /// <param name="text">The text to clean.</param>
-    /// <returns>The text with the bracketing markers removed.</returns>
-    public static string StripNoise(string text)
-    {
-        ArgumentNullException.ThrowIfNull(text);
-
-        var cleaned = text;
-        foreach (var marker in NoiseMarkers)
-        {
-            cleaned = cleaned.Replace(marker, string.Empty, StringComparison.Ordinal);
-        }
-
-        return cleaned;
     }
 
     /// <summary>Computes the longest prefix that cannot be the opening of one marker.</summary>

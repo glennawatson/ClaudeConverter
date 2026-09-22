@@ -20,6 +20,15 @@ public sealed class ThinkTagParserTests
     /// <summary>The length of the answer text used to push a tag past the literal-tag threshold.</summary>
     private const int LeadLength = 250;
 
+    /// <summary>The length of a run long enough to give up waiting for a seeded closing tag.</summary>
+    private const int HoldbackOverrun = 2100;
+
+    /// <summary>The reasoning text used across several fixtures.</summary>
+    private const string Reasoning = "reasoning";
+
+    /// <summary>Answer text carrying no tags at all.</summary>
+    private const string PlainAnswer = "just an answer";
+
     /// <summary>Reasoning and answer are separated when both arrive in one chunk.</summary>
     /// <returns>A task that completes when the assertions have run.</returns>
     [Test]
@@ -38,7 +47,7 @@ public sealed class ThinkTagParserTests
     {
         var segments = Run("<thi", "nk>reasoning</thi", $"nk>{Answer}");
 
-        await Assert.That(Join(segments, thinking: true)).IsEqualTo("reasoning");
+        await Assert.That(Join(segments, thinking: true)).IsEqualTo(Reasoning);
         await Assert.That(Join(segments, thinking: false)).IsEqualTo(Answer);
     }
 
@@ -60,9 +69,9 @@ public sealed class ThinkTagParserTests
     [Test]
     public async Task PassesPlainTextThrough()
     {
-        var segments = Run("just an answer");
+        var segments = Run(PlainAnswer);
 
-        await Assert.That(Join(segments, thinking: false)).IsEqualTo("just an answer");
+        await Assert.That(Join(segments, thinking: false)).IsEqualTo(PlainAnswer);
         await Assert.That(Join(segments, thinking: true)).IsEmpty();
     }
 
@@ -139,8 +148,100 @@ public sealed class ThinkTagParserTests
     {
         var segments = Run("<think>reasoning</think>the tag is </think> here");
 
-        await Assert.That(Join(segments, thinking: true)).IsEqualTo("reasoning");
+        await Assert.That(Join(segments, thinking: true)).IsEqualTo(Reasoning);
         await Assert.That(Join(segments, thinking: false)).IsEqualTo("the tag is </think> here");
+    }
+
+    /// <summary>A seeded reasoning block split across chunks is still separated from the answer.</summary>
+    /// <returns>A task that completes when the assertions have run.</returns>
+    /// <remarks>
+    /// This is a regression test for a live defect. The single-chunk case was handled, but on a
+    /// real streamed turn the reasoning arrives a fragment at a time: each fragment was emitted as
+    /// answer text on arrival, and by the time the closing tag landed the literal-tag threshold had
+    /// been passed, so the prose and a raw <c>&lt;/think&gt;</c> both reached the client.
+    /// </remarks>
+    [Test]
+    public async Task SeededReasoningSplitAcrossChunksIsStillReasoning()
+    {
+        var segments = RunSeeded("the user ", "wants me to ", $"continue</think>{Answer}");
+
+        await Assert.That(Join(segments, thinking: true)).IsEqualTo("the user wants me to continue");
+        await Assert.That(Join(segments, thinking: false)).IsEqualTo(Answer);
+    }
+
+    /// <summary>A seeded reasoning run longer than the holdback is released as answer text.</summary>
+    /// <returns>A task that completes when the assertions have run.</returns>
+    /// <remarks>
+    /// The turn cannot be held indefinitely on the chance a closing tag is still coming, so the
+    /// text goes out. The closing tag that eventually arrives is still dropped rather than shown.
+    /// </remarks>
+    [Test]
+    public async Task SeededReasoningPastTheHoldbackBecomesAnswerWithoutALiteralTag()
+    {
+        var lead = new string('a', HoldbackOverrun);
+        var segments = RunSeeded(lead, $"</think>{Answer}");
+
+        await Assert.That(Join(segments, thinking: true)).IsEmpty();
+        await Assert.That(Join(segments, thinking: false)).IsEqualTo(lead + Answer);
+    }
+
+    /// <summary>A model that never writes a closing tag still has its answer delivered as answer text.</summary>
+    /// <returns>A task that completes when the assertions have run.</returns>
+    [Test]
+    public async Task SeededWaitReleasesPlainAnswerText()
+    {
+        var segments = RunSeeded("just ", "an answer");
+
+        await Assert.That(Join(segments, thinking: true)).IsEmpty();
+        await Assert.That(Join(segments, thinking: false)).IsEqualTo(PlainAnswer);
+    }
+
+    /// <summary>A model writing its own opening tag is parsed normally despite the seeded wait.</summary>
+    /// <returns>A task that completes when the assertions have run.</returns>
+    [Test]
+    public async Task SeededWaitYieldsToAModelThatWritesItsOwnTags()
+    {
+        var segments = RunSeeded("<think>reason", $"ing</think>{Answer}");
+
+        await Assert.That(Join(segments, thinking: true)).IsEqualTo(Reasoning);
+        await Assert.That(Join(segments, thinking: false)).IsEqualTo(Answer);
+    }
+
+    /// <summary>Reasoning reported on its own field ends the wait for a seeded tag at once.</summary>
+    /// <returns>A task that completes when the assertions have run.</returns>
+    /// <remarks>
+    /// A model with a <c>reasoning_content</c> field never seeds an inline tag, so its answer must
+    /// not be held back waiting for one that cannot arrive.
+    /// </remarks>
+    [Test]
+    public async Task ExplicitReasoningReleasesTheHeldAnswerImmediately()
+    {
+        var parser = new ThinkTagParser(true);
+        var segments = new List<ThinkTagSegment>();
+
+        parser.Feed(Answer, segments);
+        await Assert.That(segments).IsEmpty();
+
+        parser.NoteExplicitReasoning(segments);
+
+        await Assert.That(Join(segments, thinking: false)).IsEqualTo(Answer);
+    }
+
+    /// <summary>Feeds a sequence of chunks to a parser expecting a seeded reasoning block, and flushes.</summary>
+    /// <param name="chunks">The chunks to feed, in order.</param>
+    /// <returns>The segments produced.</returns>
+    private static List<ThinkTagSegment> RunSeeded(params string[] chunks)
+    {
+        var parser = new ThinkTagParser(true);
+        var segments = new List<ThinkTagSegment>();
+
+        foreach (var chunk in chunks)
+        {
+            parser.Feed(chunk, segments);
+        }
+
+        parser.Flush(segments);
+        return segments;
     }
 
     /// <summary>Feeds a sequence of chunks and flushes.</summary>
