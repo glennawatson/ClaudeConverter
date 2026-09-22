@@ -13,6 +13,7 @@ using ClaudeNim.Aot.Serialization;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Routing;
+using Microsoft.Extensions.Logging;
 
 namespace ClaudeNim.Aot.Endpoints;
 
@@ -32,6 +33,9 @@ public static class MessagesEndpointExtensions
 {
     /// <summary>The content type a Claude client expects a streamed turn to arrive as.</summary>
     private const string EventStreamContentType = "text/event-stream";
+
+    /// <summary>The longest run of a rejected upstream body that is written to the log.</summary>
+    private const int LoggedBodyLength = 400;
 
     /// <summary>The Messages API route.</summary>
     /// <param name="endpoints">The route builder the endpoint is added to.</param>
@@ -86,10 +90,13 @@ public static class MessagesEndpointExtensions
         using var lease = await services.Gate.AcquireAsync(cancellationToken).ConfigureAwait(false);
         if (!lease.IsAcquired)
         {
+            NvidiaLog.RateLimitSaturated(services.Logger);
             return AnthropicErrors.Result(
                 StatusCodes.Status429TooManyRequests,
                 "The proxy's own rate limit is saturated; retry shortly.");
         }
+
+        NvidiaLog.SendingTurn(services.Logger, request.Model, resolved.NimModel, request.IsStreaming);
 
         HttpResponseMessage response;
         try
@@ -108,7 +115,7 @@ public static class MessagesEndpointExtensions
         {
             if (!response.IsSuccessStatusCode)
             {
-                return await UpstreamFailureAsync(response, cancellationToken).ConfigureAwait(false);
+                return await UpstreamFailureAsync(response, services.Logger, cancellationToken).ConfigureAwait(false);
             }
 
             return request.IsStreaming
@@ -340,6 +347,7 @@ public static class MessagesEndpointExtensions
 
     /// <summary>Turns a failed upstream response into an Anthropic error.</summary>
     /// <param name="response">The failed upstream response.</param>
+    /// <param name="logger">The diagnostic log.</param>
     /// <param name="cancellationToken">Abandons the read when the client disconnects.</param>
     /// <returns>The error result.</returns>
     /// <remarks>
@@ -349,6 +357,7 @@ public static class MessagesEndpointExtensions
     /// </remarks>
     private static async Task<IResult?> UpstreamFailureAsync(
         HttpResponseMessage response,
+        ILogger logger,
         CancellationToken cancellationToken)
     {
         var status = (int)response.StatusCode;
@@ -361,11 +370,19 @@ public static class MessagesEndpointExtensions
         }
         catch (Exception error) when (IsUpstreamTransportFailure(error) && !cancellationToken.IsCancellationRequested)
         {
+            NvidiaLog.TurnRejectedByUpstream(logger, status, fallback);
             return AnthropicErrors.Result(status, fallback);
         }
 
+        NvidiaLog.TurnRejectedByUpstream(logger, status, Truncated(body.Length > 0 ? body : fallback));
         return AnthropicErrors.Result(status, body.Length > 0 ? body : fallback);
     }
+
+    /// <summary>Truncates a body so a log line stays a line rather than a dump of the whole payload.</summary>
+    /// <param name="body">The body to truncate.</param>
+    /// <returns>The body, truncated to <see cref="LoggedBodyLength"/> characters.</returns>
+    private static string Truncated(string body) =>
+        body.Length <= LoggedBodyLength ? body : body[..LoggedBodyLength];
 
     /// <summary>Puts the response into streaming mode and returns the writer for it.</summary>
     /// <param name="context">The HTTP context being written to.</param>

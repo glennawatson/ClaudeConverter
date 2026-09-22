@@ -3,6 +3,7 @@
 // See the LICENSE file in the project root for full license information.
 using System.Net;
 using System.Net.Http.Json;
+using System.Runtime.CompilerServices;
 using System.Text;
 using ClaudeNim.Aot.Anthropic;
 using ClaudeNim.Aot.Configuration;
@@ -209,6 +210,45 @@ public sealed class MessagesEndpointExtensionsTests
         await Assert.That(body).Contains("content_block_delta");
     }
 
+    /// <summary>A real turn logs which upstream model it was routed to.</summary>
+    /// <returns>A task that completes when the assertion has run.</returns>
+    /// <remarks>
+    /// This is a regression test for a real gap: nothing distinguished a request that never
+    /// reached the proxy from one that reached it and was rejected -- both looked like silence
+    /// in the log. This pins that a turn is recorded before its outcome is known.
+    /// </remarks>
+    [Test]
+    public async Task RealTurnLogsWhereItWasRouted()
+    {
+        List<AnthropicMessage> messages = [new(AnthropicMessage.UserRole, MessageContent.FromText(OrdinaryUserText))];
+        var request = new MessagesRequest(ClaudeModel, messages, OrdinaryMaxTokens);
+        var completion = new NimChatCompletion(
+            Choices: [new NimChoice(Message: new NimChatMessage("assistant", NimContent.FromText("hi")))]);
+        var client = new FakeNimClient { OnSendChat = _ => JsonResponse(HttpStatusCode.OK, completion) };
+        var logger = new CapturingLogger<MessageServices>();
+
+        _ = await MessagesEndpointExtensions.SendMessageAsync(request, Context(), Services(client, logger), CancellationToken.None);
+
+        await Assert.That(logger.Messages.Exists(static m =>
+                m.Contains(ClaudeModel, StringComparison.Ordinal) && m.Contains(UpstreamModel, StringComparison.Ordinal)))
+            .IsTrue();
+    }
+
+    /// <summary>A rejected upstream call logs the status it was rejected with.</summary>
+    /// <returns>A task that completes when the assertion has run.</returns>
+    [Test]
+    public async Task RejectedUpstreamCallLogsTheStatus()
+    {
+        List<AnthropicMessage> messages = [new(AnthropicMessage.UserRole, MessageContent.FromText(OrdinaryUserText))];
+        var request = new MessagesRequest(ClaudeModel, messages, OrdinaryMaxTokens);
+        var client = new FakeNimClient { OnSendChat = static _ => new(HttpStatusCode.InternalServerError) { Content = new StringContent("boom") } };
+        var logger = new CapturingLogger<MessageServices>();
+
+        _ = await MessagesEndpointExtensions.SendMessageAsync(request, Context(), Services(client, logger), CancellationToken.None);
+
+        await Assert.That(logger.Messages.Exists(static m => m.Contains("500", StringComparison.Ordinal))).IsTrue();
+    }
+
     /// <summary>Builds an HTTP context with a memory-backed response body.</summary>
     /// <returns>The context.</returns>
     private static DefaultHttpContext Context() => new() { Response = { Body = new MemoryStream() } };
@@ -216,6 +256,7 @@ public sealed class MessagesEndpointExtensionsTests
     /// <summary>Builds the services a turn is served from, wired to a fake upstream client.</summary>
     /// <param name="client">The fake upstream client.</param>
     /// <returns>The services.</returns>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private static MessageServices Services(FakeNimClient client) =>
         new(
             new FakeModelRouter(new(ClaudeModel, UpstreamModel, ModelTier.Sonnet, true)),
@@ -225,6 +266,21 @@ public sealed class MessagesEndpointExtensionsTests
             new OptimizationOptions(),
             new HttpTimeoutOptions(),
             NullLogger<MessageServices>.Instance);
+
+    /// <summary>Builds the services a turn is served from, wired to a fake upstream client and a capturing logger.</summary>
+    /// <param name="client">The fake upstream client.</param>
+    /// <param name="logger">The logger every message is captured into.</param>
+    /// <returns>The services.</returns>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static MessageServices Services(FakeNimClient client, CapturingLogger<MessageServices> logger) =>
+        new(
+            new FakeModelRouter(new(ClaudeModel, UpstreamModel, ModelTier.Sonnet, true)),
+            client,
+            new RequestGate(new RateLimitOptions(RequestsPerWindow: 0, MaxConcurrency: 0)),
+            new NvidiaNimOptions(),
+            new OptimizationOptions(),
+            new HttpTimeoutOptions(),
+            logger);
 
     /// <summary>Builds a JSON-bodied response for a completed upstream call.</summary>
     /// <param name="status">The status to return.</param>

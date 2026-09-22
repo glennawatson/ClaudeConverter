@@ -113,4 +113,39 @@ internal static partial class NvidiaLog
         Level = LogLevel.Warning,
         Message = "The upstream connection failed or timed out before a response arrived.")]
     internal static partial void LogUpstreamTransportFailure(ILogger logger, Exception error);
+
+    /// <summary>Records that a Messages API turn is being sent upstream.</summary>
+    /// <param name="logger">The log to write to.</param>
+    /// <param name="requestedModel">The Claude model name the client asked for.</param>
+    /// <param name="nimModel">The NIM model it was resolved to.</param>
+    /// <param name="streaming">Whether the turn was requested as a stream.</param>
+    /// <remarks>
+    /// Without this, nothing in the log distinguishes a request that never reached the proxy from
+    /// one that reached it and was rejected — both look like silence. This is the record that a
+    /// turn was accepted and where it was routed, before anything about the upstream's answer is
+    /// known.
+    /// </remarks>
+    [LoggerMessage(
+        EventId = 1010,
+        Level = LogLevel.Information,
+        Message = "Sending a turn for {RequestedModel} to NIM as {NimModel} (streaming: {Streaming}).")]
+    internal static partial void SendingTurn(ILogger logger, string requestedModel, string nimModel, bool streaming);
+
+    /// <summary>Records that the upstream rejected a Messages API turn outright.</summary>
+    /// <param name="logger">The log to write to.</param>
+    /// <param name="status">The status the upstream returned.</param>
+    /// <param name="body">The upstream's own error body, truncated.</param>
+    [LoggerMessage(
+        EventId = 1011,
+        Level = LogLevel.Warning,
+        Message = "NIM rejected a turn with status {Status}: {Body}")]
+    internal static partial void TurnRejectedByUpstream(ILogger logger, int status, string body);
+
+    /// <summary>Records that the proxy's own rate limit turned away a turn before it reached NIM.</summary>
+    /// <param name="logger">The log to write to.</param>
+    [LoggerMessage(
+        EventId = 1012,
+        Level = LogLevel.Warning,
+        Message = "The proxy's own rate limit is saturated; a turn was rejected before reaching NIM.")]
+    internal static partial void RateLimitSaturated(ILogger logger);
 }
