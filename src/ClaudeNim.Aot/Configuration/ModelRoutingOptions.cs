@@ -12,6 +12,16 @@ namespace ClaudeNim.Aot.Configuration;
 /// <param name="EnableOpusThinking">The reasoning override for Opus-tier requests.</param>
 /// <param name="EnableSonnetThinking">The reasoning override for Sonnet-tier requests.</param>
 /// <param name="EnableHaikuThinking">The reasoning override for Haiku-tier requests.</param>
+/// <remarks>
+/// <see cref="EnableSonnetThinking"/> defaults to off, unlike the other tiers. Claude Code's Auto
+/// Mode classifier always evaluates actions against a Sonnet-tier model, regardless of which model
+/// the user is actually working with, and it sends a large system prompt (~150,000 characters
+/// observed) on every single tool call. With reasoning enabled that turn cost 4-5 real seconds per
+/// call on NVIDIA NIM — added latency in front of every Bash/tool dispatch, not a one-off cost —
+/// because the classifier only needs a terse verdict, not a worked chain of thought. A real
+/// Sonnet-tier coding request loses the reasoning step too, which is the trade-off: faster and
+/// less verbose everywhere the Sonnet tier is used, in exchange for Auto Mode staying responsive.
+/// </remarks>
 [System.Diagnostics.DebuggerDisplay("ModelRoutingOptions: {ToString(),nq}")]
 public sealed record ModelRoutingOptions(
     string Default = ModelRoutingOptions.FallbackModel,
@@ -20,7 +30,7 @@ public sealed record ModelRoutingOptions(
     string Haiku = "",
     bool EnableThinking = true,
     bool? EnableOpusThinking = null,
-    bool? EnableSonnetThinking = null,
+    bool? EnableSonnetThinking = false,
     bool? EnableHaikuThinking = null)
 {
     /// <summary>The configuration section these options are bound from.</summary>

@@ -3,6 +3,7 @@
 // See the LICENSE file in the project root for full license information.
 using System.Linq;
 using System.Runtime.CompilerServices;
+using System.Text.Json;
 using ClaudeNim.Aot.Anthropic;
 using ClaudeNim.Aot.Configuration;
 using ClaudeNim.Aot.Nvidia;
@@ -32,6 +33,9 @@ public sealed class NimRequestBuilderTests
 
     /// <summary>The Claude model name used across the fixture requests.</summary>
     private const string ClaudeModel = "claude-sonnet-5";
+
+    /// <summary>The user text used by the minimal fixture requests.</summary>
+    private const string UserText = "hello";
 
     /// <summary>The settings a request is built against.</summary>
     private static readonly NvidiaNimOptions Options = new();
@@ -171,6 +175,29 @@ public sealed class NimRequestBuilderTests
         await Assert.That(message.Content?.Text).Contains("[Document]");
     }
 
+    /// <summary>A structured-output request reaches NIM in the nested OpenAI <c>response_format</c> shape.</summary>
+    /// <returns>A task that completes when the assertions have run.</returns>
+    [Test]
+    public async Task StructuredOutputIsTranslatedToResponseFormat()
+    {
+        var request = RequestWithFormat();
+
+        var built = NimRequestBuilder.Build(request, UpstreamModel, false, Options);
+
+        var format = built.ResponseFormat;
+        await Assert.That(format).IsNotNull();
+        await Assert.That(format!.Value.GetProperty("type").GetString()).IsEqualTo("json_schema");
+        await Assert.That(format.Value.GetProperty("json_schema").GetProperty("schema").GetProperty("type").GetString())
+            .IsEqualTo("object");
+    }
+
+    /// <summary>A request with no output format carries no <c>response_format</c>.</summary>
+    /// <returns>A task that completes when the assertion has run.</returns>
+    [Test]
+    public async Task AbsentOutputFormatSendsNoResponseFormat() =>
+        await Assert.That(NimRequestBuilder.Build(Request(), UpstreamModel, false, Options).ResponseFormat)
+            .IsNull();
+
     /// <summary>Finds the single user message in an upstream request.</summary>
     /// <param name="request">The upstream request.</param>
     /// <returns>The user message.</returns>
@@ -202,8 +229,19 @@ public sealed class NimRequestBuilderTests
     private static MessagesRequest Request(bool streaming = false, ThinkingConfig? thinking = null) =>
         new(
             ClaudeModel,
-            [new AnthropicMessage(AnthropicMessage.UserRole, MessageContent.FromText("hello"))],
+            [new AnthropicMessage(AnthropicMessage.UserRole, MessageContent.FromText(UserText))],
             RequestedMaxTokens,
             Stream: streaming,
             Thinking: thinking);
+
+    /// <summary>Builds a request asking for a structured JSON output.</summary>
+    /// <returns>The Anthropic request.</returns>
+    private static MessagesRequest RequestWithFormat() =>
+        new(
+            ClaudeModel,
+            [new AnthropicMessage(AnthropicMessage.UserRole, MessageContent.FromText(UserText))],
+            RequestedMaxTokens,
+            OutputConfig: new OutputConfig(
+                Format: new OutputFormat(
+                    Schema: JsonSerializer.SerializeToElement(new { type = "object" }))));
 }

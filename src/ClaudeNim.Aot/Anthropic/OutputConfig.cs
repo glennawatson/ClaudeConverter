@@ -5,8 +5,10 @@ using System.Text.Json.Serialization;
 
 namespace ClaudeNim.Aot.Anthropic;
 
-/// <summary>The caller's output shaping request, carrying the effort level introduced with Claude 4.7.</summary>
+/// <summary>The caller's output shaping request.</summary>
 /// <param name="Effort">How hard the model should work; see <see cref="EffortLevels"/>.</param>
+/// <param name="Format">The structured-output schema the answer must conform to, when one was asked for.</param>
 [System.Diagnostics.DebuggerDisplay("OutputConfig: {ToString(),nq}")]
 public sealed record OutputConfig(
-    [property: JsonPropertyName("effort")] string? Effort = null);
+    [property: JsonPropertyName("effort")] string? Effort = null,
+    [property: JsonPropertyName("format")] OutputFormat? Format = null);

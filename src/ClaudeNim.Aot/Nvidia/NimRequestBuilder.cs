@@ -5,6 +5,7 @@ using System.Text;
 using System.Text.Json;
 using ClaudeNim.Aot.Anthropic;
 using ClaudeNim.Aot.Configuration;
+using ClaudeNim.Aot.Serialization;
 
 namespace ClaudeNim.Aot.Nvidia;
 
@@ -60,6 +61,7 @@ public static class NimRequestBuilder
             ParallelToolCalls: ResolveParallelToolCalls(request, options, tools is not null),
             ChatTemplateKwargs: BuildTemplateArguments(request, thinkingEnabled, tools is not null),
             ReasoningEffort: effort,
+            ResponseFormat: BuildResponseFormat(request.OutputConfig?.Format),
             Extensions: BuildExtensions(request, thinkingEnabled));
     }
 
@@ -75,6 +77,25 @@ public static class NimRequestBuilder
         }
 
         return ceiling > 0 && requested > ceiling ? ceiling : requested;
+    }
+
+    /// <summary>Translates an Anthropic structured-output request into NIM's <c>response_format</c>.</summary>
+    /// <param name="format">The requested output format, which may be <see langword="null"/>.</param>
+    /// <returns>The upstream <c>response_format</c>, or <see langword="null"/> when none was asked for.</returns>
+    /// <remarks>
+    /// Anthropic nests the schema directly under <c>format</c>; NIM follows the OpenAI shape, which
+    /// nests it once more under <c>json_schema</c>. A request carrying no schema, or an unrecognised
+    /// discriminator, is dropped rather than forwarded in a shape the upstream would reject.
+    /// </remarks>
+    private static JsonElement? BuildResponseFormat(OutputFormat? format)
+    {
+        if (format?.Schema is not { } schema || !string.Equals(format.Type, OutputFormat.JsonSchema, StringComparison.Ordinal))
+        {
+            return null;
+        }
+
+        ResponseFormatEnvelope envelope = new(format.Type, new(schema));
+        return JsonSerializer.SerializeToElement(envelope, ProxyJsonContext.Default.ResponseFormatEnvelope);
     }
 
     /// <summary>Reads the configured top-k cutoff, treating a negative value as unset.</summary>

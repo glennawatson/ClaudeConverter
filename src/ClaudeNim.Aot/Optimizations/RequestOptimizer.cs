@@ -43,12 +43,17 @@ public static class RequestOptimizer
             return true;
         }
 
-        if (TryAnswerFromUserText(UserText(request), options, out answer))
+        var user = UserText(request);
+        var system = ContentText.Extract(request.System);
+        var housekeepingSized =
+            user.Length + system.Length <= OptimizationMarkers.MaxHousekeepingContentLength;
+
+        if (housekeepingSized && TryAnswerFromUserText(user, options, out answer))
         {
             return true;
         }
 
-        if (options.SkipTitleGeneration && IsTitleRequest(ContentText.Extract(request.System)))
+        if (housekeepingSized && options.SkipTitleGeneration && IsTitleRequest(system))
         {
             answer = TitleAnswer;
             return true;
@@ -108,6 +113,12 @@ public static class RequestOptimizer
     /// <summary>Determines whether a prompt asks which prefix a command should be matched on.</summary>
     /// <param name="user">The flattened user text.</param>
     /// <returns><see langword="true"/> when the prompt is a prefix request.</returns>
+    /// <remarks>
+    /// The caller has already checked the combined content is short — see
+    /// <see cref="OptimizationMarkers.MaxHousekeepingContentLength"/> — so these two markers, which
+    /// Auto Mode's own classifier turn can also carry, are only trusted on a request shaped like
+    /// the standalone question this fast path was built to answer.
+    /// </remarks>
     private static bool IsPrefixRequest(string user) =>
         user.Contains(OptimizationMarkers.PolicySpec, StringComparison.Ordinal)
         && user.Contains(OptimizationMarkers.CommandLabel, StringComparison.Ordinal);

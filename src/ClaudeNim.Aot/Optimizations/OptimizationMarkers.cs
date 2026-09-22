@@ -26,6 +26,18 @@ public static class OptimizationMarkers
     /// <summary>The output ceiling a quota probe is sent with, which no real turn uses.</summary>
     internal const int QuotaProbeMaxTokens = 1;
 
+    /// <summary>The most system-prompt and user-text characters a genuine housekeeping request carries.</summary>
+    /// <remarks>
+    /// Both ask a single, standalone question about one command or one short exchange — a few
+    /// hundred characters at most, never a full conversation. Auto Mode's own classifier turn, by
+    /// contrast, packs its huge system prompt and a replayed transcript into as few messages as it
+    /// likes (observed at ~150,000 characters total across only a handful of messages), so a
+    /// message-count guard alone does not catch it — size does. This is the same kind of shape
+    /// guard <see cref="QuotaProbeMaxTokens"/> already is: a real housekeeping request is never
+    /// this long, so it costs nothing to require it stay short.
+    /// </remarks>
+    internal const int MaxHousekeepingContentLength = 2000;
+
     /// <summary>The word every conversation-title prompt contains.</summary>
     internal const string Title = "title";
 

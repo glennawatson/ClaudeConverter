@@ -13,14 +13,29 @@ namespace ClaudeNim.Aot.Configuration;
 /// Each of these requests has a known, content-free answer. Serving them from the proxy
 /// removes a network round trip and, on a metered upstream, a billed completion.
 /// <para>
-/// <see cref="DetectCommandPrefix"/> defaults to <see langword="false"/>, unlike the others: its
-/// two markers (<c>&lt;policy_spec&gt;</c> and <c>Command:</c>) are not unique to the legacy
-/// manual-permission-mode prefix question it was built for. Claude Code's Auto Mode classifier's
-/// own <c>xml_s1</c> stage sends a request carrying the same markers, and this fast path answered
-/// it with a bare extracted prefix (e.g. <c>"ls"</c>) instead of forwarding it for a real
-/// classification, which the classifier cannot parse as a verdict — it retries several times and
-/// then fails closed with "Auto mode could not evaluate this action". A missed match here is
-/// harmless (a real upstream call); a false match silently broke Auto Mode entirely.
+/// <see cref="DetectCommandPrefix"/>'s two markers (<c>&lt;policy_spec&gt;</c> and <c>Command:</c>)
+/// and <see cref="SkipTitleGeneration"/>'s two markers (the word "title" plus a corroborating
+/// phrase such as "coding session") are not unique to the legacy requests they were built for —
+/// Claude Code's Auto Mode classifier's own turn can carry the same marker text, in a system prompt
+/// describing evaluating an action taken "during this coding session". Both fast paths answered a
+/// full classifier turn — huge system prompt, replayed transcript and all — with a canned reply
+/// (a bare extracted command prefix, or the literal string <c>"Conversation"</c>) instead of
+/// forwarding it for a real classification, which the classifier cannot parse as a verdict; it
+/// retried and then failed closed with "Auto mode could not evaluate this action", with no error
+/// surfaced anywhere that pointed back at this proxy. Reproduced directly against the proxy.
+/// </para>
+/// <para>
+/// The actual fix is <see cref="Optimizations.OptimizationMarkers.MaxHousekeepingContentLength"/>:
+/// a genuine title-generation or command-prefix request is a single, standalone question — a few
+/// hundred characters — never a replayed conversation. A message-count guard alone does not catch
+/// Auto Mode's classifier turn, since it can pack its ~150,000-character system prompt and
+/// transcript into as few messages as it likes; <c>RequestOptimizer</c> instead requires the
+/// combined system-prompt and user-text length stay short before trusting either fast path's
+/// marker text — the same shape-over-content principle <see cref="MockQuotaProbe"/>'s own check
+/// already used. Both fast paths stay on by default; a missed match is still harmless (an ordinary
+/// upstream call), and a request shaped like Auto Mode's classifier turn no longer matches either
+/// one — verified directly against the proxy with the exact request shape a live classifier
+/// failure was traced to.
 /// </para>
 /// </remarks>
 [System.Diagnostics.DebuggerDisplay("OptimizationOptions: {ToString(),nq}")]
@@ -28,7 +43,7 @@ public sealed record OptimizationOptions(
     bool MockQuotaProbe = true,
     bool SkipTitleGeneration = true,
     bool SkipSuggestionMode = true,
-    bool DetectCommandPrefix = false,
+    bool DetectCommandPrefix = true,
     bool MockFilePathExtraction = true)
 {
     /// <summary>The configuration section these options are bound from.</summary>
