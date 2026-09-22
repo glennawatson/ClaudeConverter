@@ -39,27 +39,27 @@ public static class EmbeddedToolCallSyntax
     private const string Fence = "```";
 
     /// <summary>The opening tokens, each paired with the separator and terminator that follow it.</summary>
-    private static readonly (string Open, string Separator, string Close)[] Forms =
+    private static readonly EmbeddedCallForm[] Forms =
     [
-        (CallOpen, CallArguments, CallClose),
-        (DeepSeekOpen, DeepSeekSeparator, DeepSeekClose),
+        new(CallOpen, CallArguments, CallClose),
+        new(DeepSeekOpen, DeepSeekSeparator, DeepSeekClose),
     ];
 
     /// <summary>Finds the earliest call opening in a run of text.</summary>
     /// <param name="text">The text to scan.</param>
-    /// <returns>The opening's position and the tokens that go with it, with an index of -1 when there is none.</returns>
-    public static (int Index, string Open, string Separator, string Close) FindOpening(string text)
+    /// <returns>The opening, which reports itself as not found when the text holds none.</returns>
+    public static EmbeddedCallOpening FindOpening(string text)
     {
         ArgumentNullException.ThrowIfNull(text);
 
-        var best = (Index: -1, Open: string.Empty, Separator: string.Empty, Close: string.Empty);
+        var best = EmbeddedCallOpening.NotFound;
 
-        foreach (var (open, separator, close) in Forms)
+        foreach (var form in Forms)
         {
-            var index = text.IndexOf(open, StringComparison.Ordinal);
-            if (index >= 0 && (best.Index < 0 || index < best.Index))
+            var index = text.IndexOf(form.Open, StringComparison.Ordinal);
+            if (index >= 0 && (!best.Found || index < best.Index))
             {
-                best = (index, open, separator, close);
+                best = new(index, form);
             }
         }
 
@@ -75,9 +75,9 @@ public static class EmbeddedToolCallSyntax
 
         var safe = ControlMarkers.SafeLength(text);
 
-        foreach (var (open, _, _) in Forms)
+        foreach (var form in Forms)
         {
-            safe = Math.Min(safe, SafeLength(text, open));
+            safe = Math.Min(safe, SafeLength(text, form.Open));
         }
 
         return safe;

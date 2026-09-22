@@ -165,7 +165,7 @@ public sealed class NimModelCatalog : INimModelCatalog, IDisposable
     /// <summary>Builds the complete advertised model listing.</summary>
     /// <param name="cancellationToken">The token that cancels the operation.</param>
     /// <returns>The advertised listing, and whether it came from NVIDIA rather than the built-ins.</returns>
-    private async ValueTask<(List<ModelDescriptor> Models, bool FromUpstream)> BuildAsync(CancellationToken cancellationToken)
+    private async ValueTask<CatalogRefresh> BuildAsync(CancellationToken cancellationToken)
     {
         var (upstream, fromUpstream) = await FetchIdentifiersAsync(cancellationToken).ConfigureAwait(false);
         var models = new List<ModelDescriptor>(upstream.Count * VariantsPerModel);
@@ -180,14 +180,13 @@ public sealed class NimModelCatalog : INimModelCatalog, IDisposable
             AddClaudeAliases(models);
         }
 
-        return (models, fromUpstream);
+        return new(models, fromUpstream);
     }
 
     /// <summary>Fetches the model identifiers and published dates from NVIDIA's catalogue.</summary>
     /// <param name="cancellationToken">The token that cancels the operation.</param>
     /// <returns>The identifiers and dates of chat-capable models, and whether NVIDIA supplied them.</returns>
-    private async ValueTask<(List<NimCatalogEntry> Entries, bool FromUpstream)> FetchIdentifiersAsync(
-        CancellationToken cancellationToken)
+    private async ValueTask<CatalogEntries> FetchIdentifiersAsync(CancellationToken cancellationToken)
     {
         var listing = await TryListAsync(cancellationToken).ConfigureAwait(false);
         var entries = new List<NimCatalogEntry>();
@@ -207,7 +206,7 @@ public sealed class NimModelCatalog : INimModelCatalog, IDisposable
 
         if (entries.Count > 0)
         {
-            return (entries, true);
+            return new(entries, true);
         }
 
         NvidiaLog.UsingBuiltInModelList(_logger);
@@ -216,7 +215,7 @@ public sealed class NimModelCatalog : INimModelCatalog, IDisposable
             entries.Add(new(profile.Id, PublishedFallback));
         }
 
-        return (entries, false);
+        return new(entries, false);
     }
 
     /// <summary>Fetches the upstream listing, tolerating an unreachable endpoint or timeout.</summary>

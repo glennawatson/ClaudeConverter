@@ -85,20 +85,20 @@ public sealed class EmbeddedToolCallParser
         var opening = EmbeddedToolCallSyntax.FindOpening(text);
         var named = NamedToolCallSyntax.FindOpening(text);
 
-        if (named.Index >= 0 && (opening.Index < 0 || named.Index < opening.Index))
+        if (named.Found && (!opening.Found || named.Index < opening.Index))
         {
             return StepNamed(runs, text, named.Index, named.Form);
         }
 
-        if (opening.Index < 0)
+        if (!opening.Found)
         {
             return ReleaseSafePrefix(runs, text);
         }
 
         EmitText(runs, text[..opening.Index]);
 
-        var body = text[(opening.Index + opening.Open.Length)..];
-        var close = body.IndexOf(opening.Close, StringComparison.Ordinal);
+        var body = text[(opening.Index + opening.Form.Open.Length)..];
+        var close = body.IndexOf(opening.Form.Close, StringComparison.Ordinal);
 
         if (close < 0)
         {
@@ -107,12 +107,12 @@ public sealed class EmbeddedToolCallParser
             return false;
         }
 
-        if (EmbeddedToolCallSyntax.ReadCall(body[..close], opening.Separator) is { } call)
+        if (EmbeddedToolCallSyntax.ReadCall(body[..close], opening.Form.Separator) is { } call)
         {
             runs.Add(call);
         }
 
-        _ = _buffer.Remove(0, opening.Index + opening.Open.Length + close + opening.Close.Length);
+        _ = _buffer.Remove(0, opening.Index + opening.Form.Open.Length + close + opening.Form.Close.Length);
         return true;
     }
 

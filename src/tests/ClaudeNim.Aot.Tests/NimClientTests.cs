@@ -276,7 +276,7 @@ public sealed class NimClientTests
     /// <param name="logger">The logger the run wrote to.</param>
     /// <returns>The warning-and-above entries.</returns>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private static List<(LogLevel Level, int EventId, string Message)> Warnings(CapturingLogger<NimClient> logger) =>
+    private static List<LogEntry> Warnings(CapturingLogger<NimClient> logger) =>
         logger.Entries.FindAll(static entry => entry.Level >= LogLevel.Warning);
 
     /// <summary>Builds a client wired to a fake transport.</summary>

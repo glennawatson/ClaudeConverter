@@ -60,19 +60,19 @@ public static class NamedToolCallSyntax
 
     /// <summary>Finds the earliest call opening in a run of text.</summary>
     /// <param name="text">The text to scan.</param>
-    /// <returns>The opening's position and the form it belongs to, with an index of -1 when there is none.</returns>
-    public static (int Index, NamedCallForm Form) FindOpening(string text)
+    /// <returns>The opening, which reports itself as not found when the text holds none.</returns>
+    public static NamedCallOpening FindOpening(string text)
     {
         ArgumentNullException.ThrowIfNull(text);
 
-        var best = (Index: -1, Form: default(NamedCallForm));
+        var best = NamedCallOpening.NotFound;
 
         for (var i = 0; i < Forms.Length; i++)
         {
             var index = text.IndexOf(Forms[i].CallOpen, StringComparison.Ordinal);
-            if (index >= 0 && (best.Index < 0 || index < best.Index))
+            if (index >= 0 && (!best.Found || index < best.Index))
             {
-                best = (index, Forms[i]);
+                best = new(index, Forms[i]);
             }
         }
 

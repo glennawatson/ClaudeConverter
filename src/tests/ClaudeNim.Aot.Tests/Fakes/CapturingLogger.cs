@@ -18,7 +18,7 @@ internal sealed class CapturingLogger<TCategoryName> : ILogger<TCategoryName>
     /// The text alone cannot say whether a message would survive the level an operator actually
     /// runs at, which for the failure records is the whole point of writing them.
     /// </remarks>
-    public List<(LogLevel Level, int EventId, string Message)> Entries { get; } = [];
+    public List<LogEntry> Entries { get; } = [];
 
     /// <inheritdoc/>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -41,6 +41,6 @@ internal sealed class CapturingLogger<TCategoryName> : ILogger<TCategoryName>
 
         var message = formatter(state, exception);
         Messages.Add(message);
-        Entries.Add((logLevel, eventId.Id, message));
+        Entries.Add(new(logLevel, eventId.Id, message));
     }
 }
