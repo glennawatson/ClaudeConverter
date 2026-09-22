@@ -13,5 +13,5 @@ namespace ClaudeNim.Aot;
 public sealed class WebHostMarker
 {
     /// <summary>Gets the proxy's assembly, for anything that needs to reflect over it without hosting the app.</summary>
-    public System.Reflection.Assembly Assembly => typeof(WebHostMarker).Assembly;
+    public System.Reflection.Assembly Assembly => GetType().Assembly;
 }
