@@ -51,6 +51,16 @@ public static class Program
         // keeps the scope worth printing.
         _ = builder.Logging.Configure(static options => options.ActivityTrackingOptions = ActivityTrackingOptions.None);
 
+        // Written for whoever is reading it: the journal when systemd is running this, and the
+        // terminal otherwise.
+        if (ConsoleLogging.Formatter(
+            builder.Configuration[ConsoleLogging.FormatterNameKey],
+            Environment.GetEnvironmentVariable("JOURNAL_STREAM"),
+            Environment.GetEnvironmentVariable("INVOCATION_ID")) is { } formatter)
+        {
+            _ = builder.Logging.AddConsole(options => options.FormatterName = formatter);
+        }
+
         _ = builder.Services.ConfigureHttpJsonOptions(ProxyServiceExtensions.ConfigureJsonSerialization);
 
         _ = builder.Services.AddClaudeNimProxy(builder.Configuration);

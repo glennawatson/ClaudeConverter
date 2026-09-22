@@ -440,6 +440,24 @@ internal static partial class NvidiaLog
         Message = "NIM rejected a turn for {Model} with status {Status}: {Body}")]
     internal static partial void TurnRejectedByUpstream(ILogger logger, string model, int status, string body);
 
+    /// <summary>Records that NVIDIA refused the credential this proxy runs on.</summary>
+    /// <param name="logger">The log to write to.</param>
+    /// <param name="model">The NIM model the turn was sent to.</param>
+    /// <param name="status">The status the upstream returned.</param>
+    /// <param name="body">The upstream's own error body, truncated.</param>
+    /// <remarks>
+    /// The only failure here an operator has to act on, and the one thing in this log that is not
+    /// a degraded turn but a broken deployment: the key this proxy was started with is the one
+    /// being refused, so every turn will fail the same way until it is replaced. Nothing the
+    /// client does, including logging in again, can touch it — which is why it is the one message
+    /// written at error rather than warning, and shows in the journal as such.
+    /// </remarks>
+    [LoggerMessage(
+        EventId = 1031,
+        Level = LogLevel.Error,
+        Message = "NVIDIA refused this proxy's own credential with status {Status} for {Model}; every turn will fail until the key is replaced. Upstream said: {Body}")]
+    internal static partial void UpstreamCredentialRejected(ILogger logger, string model, int status, string body);
+
     /// <summary>Records that the proxy's own rate limit turned away a turn before it reached NIM.</summary>
     /// <param name="logger">The log to write to.</param>
     /// <param name="model">The NIM model the turn would have been sent to.</param>

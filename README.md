@@ -191,6 +191,14 @@ chain being unavailable (1028), or the client walking away before an answer arri
 names the NIM model it happened to, so a model that is quietly failing shows up as a pattern rather
 than as noise spread across tiers.
 
+Started by systemd, the proxy writes each entry on one line with the priority prefix the journal
+reads, so `journalctl` colours a warning yellow and an error red and `journalctl -p warning` finds
+them — without it every line is filed as plain information whatever it says. That is picked by
+detecting systemd rather than configured, and a `Logging:Console:FormatterName` in configuration
+overrides it either way. One message is written at error: NVIDIA refusing the credential the proxy
+itself runs on, which is the only failure here that no turn can recover from and an operator has to
+fix.
+
 ## Endpoints
 
 | Route | Notes |

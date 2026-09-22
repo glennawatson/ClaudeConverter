@@ -780,13 +780,35 @@ public static class MessagesEndpointExtensions
         }
         catch (Exception error) when (IsUpstreamTransportFailure(error) && !cancellationToken.IsCancellationRequested)
         {
-            NvidiaLog.TurnRejectedByUpstream(logger, nimModel, upstreamStatus, fallback);
+            ReportRejection(logger, nimModel, upstreamStatus, fallback);
             return AnthropicErrors.Result(status, Describe(upstreamStatus, fallback));
         }
 
         var detail = body.Length > 0 ? body : fallback;
-        NvidiaLog.TurnRejectedByUpstream(logger, nimModel, upstreamStatus, Truncated(detail));
+        ReportRejection(logger, nimModel, upstreamStatus, Truncated(detail));
+
         return AnthropicErrors.Result(status, Describe(upstreamStatus, detail));
+    }
+
+    /// <summary>Reports a rejected turn at the level the rejection actually warrants.</summary>
+    /// <param name="logger">The diagnostic log.</param>
+    /// <param name="nimModel">The NIM model that rejected the turn.</param>
+    /// <param name="upstreamStatus">The status NIM returned.</param>
+    /// <param name="body">The upstream's own error body, truncated.</param>
+    /// <remarks>
+    /// A refused credential is the proxy's own, and no turn will succeed until it is replaced;
+    /// every other rejection describes one turn. The first is an error, the rest are warnings,
+    /// and the journal colours and filters them apart on exactly that distinction.
+    /// </remarks>
+    private static void ReportRejection(ILogger logger, string nimModel, int upstreamStatus, string body)
+    {
+        if (upstreamStatus is StatusCodes.Status401Unauthorized or StatusCodes.Status403Forbidden)
+        {
+            NvidiaLog.UpstreamCredentialRejected(logger, nimModel, upstreamStatus, body);
+            return;
+        }
+
+        NvidiaLog.TurnRejectedByUpstream(logger, nimModel, upstreamStatus, body);
     }
 
     /// <summary>Maps an upstream status onto the one the caller should be given.</summary>

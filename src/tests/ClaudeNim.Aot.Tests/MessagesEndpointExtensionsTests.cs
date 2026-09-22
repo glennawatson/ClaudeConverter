@@ -252,6 +252,30 @@ public sealed class MessagesEndpointExtensionsTests
         await Assert.That(client.Requests[2].Model).IsEqualTo(UpstreamModel);
     }
 
+    /// <summary>A refused credential is reported at error, where every other rejection is a warning.</summary>
+    /// <returns>A task that completes when the assertions have run.</returns>
+    /// <remarks>
+    /// It is the one failure here an operator has to act on: the key being refused is the proxy's
+    /// own, so no turn will succeed until it is replaced. The journal colours and filters on the
+    /// level, which is what makes that distinction visible at a glance.
+    /// </remarks>
+    [Test]
+    public async Task RefusedCredentialIsReportedAsAnError()
+    {
+        var client = new FakeNimClient { OnSendChat = static _ => new HttpResponseMessage(HttpStatusCode.Unauthorized) { Content = new StringContent("no key") } };
+        var logger = new CapturingLogger<MessageServices>();
+
+        List<AnthropicMessage> messages = [new(AnthropicMessage.UserRole, MessageContent.FromText(OrdinaryUserText))];
+        var request = new MessagesRequest(ClaudeModel, messages, OrdinaryMaxTokens);
+
+        _ = await MessagesEndpointExtensions.SendMessageAsync(request, Context(), Services(client, logger), CancellationToken.None);
+
+        var refused = logger.Entries.Find(static entry => entry.Message.Contains("own credential", StringComparison.Ordinal));
+
+        await Assert.That(refused.Message).IsNotNull();
+        await Assert.That(refused.Level).IsEqualTo(LogLevel.Error);
+    }
+
     /// <summary>A spent chain says so, rather than leaving the log at the last model it tried.</summary>
     /// <returns>A task that completes when the assertions have run.</returns>
     /// <remarks>
