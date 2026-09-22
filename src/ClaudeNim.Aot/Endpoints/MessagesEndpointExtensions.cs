@@ -87,7 +87,8 @@ public static class MessagesEndpointExtensions
             request,
             resolved.NimModel,
             resolved.ThinkingEnabled,
-            services.Nim);
+            services.Nim,
+            services.Catalog.DefaultMaxOutputTokens);
 
         using var lease = await services.Gate.AcquireAsync(cancellationToken).ConfigureAwait(false);
         if (!lease.IsAcquired)

@@ -16,9 +16,17 @@ namespace ClaudeNim.Aot.Configuration;
 public sealed record ModelCatalogOptions(
     int CacheMinutes = 30,
     int DefaultContextWindow = 131_072,
-    int DefaultMaxOutputTokens = 65_536,
+    int DefaultMaxOutputTokens = ModelCatalogOptions.DefaultOutputTokens,
     bool AdvertiseClaudeAliases = true)
 {
+    /// <summary>The output ceiling assumed for a model NVIDIA does not size.</summary>
+    /// <remarks>
+    /// Named because it bounds turns as well as describing them: the same number the listing
+    /// advertises is the one a request is held to, and the two drifting apart is how a client
+    /// comes to ask for a length it was told it could have and silently get less.
+    /// </remarks>
+    internal const int DefaultOutputTokens = 65_536;
+
     /// <summary>The configuration section these options are bound from.</summary>
     internal const string SectionName = "ModelCatalog";
 }

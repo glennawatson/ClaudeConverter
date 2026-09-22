@@ -7,7 +7,11 @@ namespace ClaudeNim.Aot.Configuration;
 /// <param name="ApiKey">The NVIDIA NIM API key used as the bearer credential.</param>
 /// <param name="BaseUrl">The OpenAI-compatible base address of the NIM endpoint.</param>
 /// <param name="Proxy">An optional outbound HTTP proxy, or an empty string for none.</param>
-/// <param name="MaxTokens">The ceiling applied to the requested completion length.</param>
+/// <param name="MaxTokens">
+/// The completion length used when the caller asks for none. This no longer bounds a caller who
+/// does ask: the bound is the model's own documented ceiling, so that what the listing advertises
+/// and what a turn is held to are the same number.
+/// </param>
 /// <param name="Temperature">The sampling temperature applied when the caller supplies none.</param>
 /// <param name="TopP">The nucleus sampling cutoff applied when the caller supplies none.</param>
 /// <param name="TopK">The top-k sampling cutoff, or a negative value to leave it unset.</param>

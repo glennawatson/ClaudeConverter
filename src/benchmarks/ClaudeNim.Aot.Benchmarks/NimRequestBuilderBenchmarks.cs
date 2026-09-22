@@ -26,6 +26,9 @@ public class NimRequestBuilderBenchmarks
     /// <summary>The output-token ceiling attached to the request fixture.</summary>
     private const int MaxTokens = 4096;
 
+    /// <summary>The output ceiling assumed for a model the catalogue does not size.</summary>
+    private const int CatalogDefault = 65_536;
+
     /// <summary>The length of the fixture's base64 image payload.</summary>
     private const int ImageDataLength = 4096;
 
@@ -56,7 +59,7 @@ public class NimRequestBuilderBenchmarks
 
         for (var i = 0; i < Repetitions; i++)
         {
-            count = NimRequestBuilder.Build(_request, VisionModel, thinkingEnabled: true, Options).Messages.Count;
+            count = NimRequestBuilder.Build(_request, VisionModel, thinkingEnabled: true, Options, CatalogDefault).Messages.Count;
         }
 
         return count;

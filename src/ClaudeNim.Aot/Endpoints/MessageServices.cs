@@ -14,6 +14,7 @@ namespace ClaudeNim.Aot.Endpoints;
 /// <param name="Client">The upstream transport.</param>
 /// <param name="Gate">Bounds how fast requests reach the upstream.</param>
 /// <param name="Nim">The configured NIM defaults.</param>
+/// <param name="Catalog">The sizing the advertised listing is built from, which also bounds a turn.</param>
 /// <param name="Optimizations">The switches for the local fast paths.</param>
 /// <param name="Timeouts">The configured upstream timeouts.</param>
 /// <param name="Logger">The diagnostic log.</param>
@@ -27,6 +28,7 @@ public sealed record MessageServices(
     INimClient Client,
     IRequestGate Gate,
     NvidiaNimOptions Nim,
+    ModelCatalogOptions Catalog,
     OptimizationOptions Optimizations,
     HttpTimeoutOptions Timeouts,
     ILogger<MessageServices> Logger);

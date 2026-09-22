@@ -37,6 +37,9 @@ public sealed class NimRequestBuilderTests
     /// <summary>The user text used by the minimal fixture requests.</summary>
     private const string UserText = "hello";
 
+    /// <summary>The output ceiling assumed for a model the catalogue does not size.</summary>
+    private const int CatalogDefault = 65_536;
+
     /// <summary>The structured-output discriminator, and the member the schema nests under.</summary>
     private const string JsonSchema = "json_schema";
 
@@ -48,7 +51,7 @@ public sealed class NimRequestBuilderTests
     [Test]
     public async Task StreamedTurnRequestsUsage()
     {
-        var built = NimRequestBuilder.Build(Request(streaming: true), UpstreamModel, false, Options);
+        var built = NimRequestBuilder.Build(Request(streaming: true), UpstreamModel, false, Options, CatalogDefault);
 
         await Assert.That(built.Stream).IsTrue();
         await Assert.That(built.StreamOptions?.IncludeUsage).IsTrue();
@@ -58,7 +61,7 @@ public sealed class NimRequestBuilderTests
     /// <returns>A task that completes when the assertion has run.</returns>
     [Test]
     public async Task NonStreamedTurnOmitsStreamOptions() =>
-        await Assert.That(NimRequestBuilder.Build(Request(), UpstreamModel, false, Options).StreamOptions)
+        await Assert.That(NimRequestBuilder.Build(Request(), UpstreamModel, false, Options, CatalogDefault).StreamOptions)
             .IsNull();
 
     /// <summary>A reasoning budget is never invented from the output ceiling.</summary>
@@ -72,7 +75,7 @@ public sealed class NimRequestBuilderTests
     [Test]
     public async Task ReasoningBudgetIsNotDerivedFromMaxTokens()
     {
-        var built = NimRequestBuilder.Build(Request(), UpstreamModel, true, Options);
+        var built = NimRequestBuilder.Build(Request(), UpstreamModel, true, Options, CatalogDefault);
 
         await Assert.That(built.Extensions).IsNull();
     }
@@ -83,7 +86,7 @@ public sealed class NimRequestBuilderTests
     public async Task ExplicitReasoningBudgetIsForwarded()
     {
         var thinking = new ThinkingConfig("enabled", BudgetTokens: ExplicitReasoningBudget);
-        var built = NimRequestBuilder.Build(Request(thinking: thinking), UpstreamModel, true, Options);
+        var built = NimRequestBuilder.Build(Request(thinking: thinking), UpstreamModel, true, Options, CatalogDefault);
 
         await Assert.That(built.Extensions?.MaxThinkingTokens).IsEqualTo(ExplicitReasoningBudget);
     }
@@ -93,7 +96,7 @@ public sealed class NimRequestBuilderTests
     [Test]
     public async Task ReasoningIsRequestedAtTheTopLevel()
     {
-        var built = NimRequestBuilder.Build(Request(), UpstreamModel, true, Options);
+        var built = NimRequestBuilder.Build(Request(), UpstreamModel, true, Options, CatalogDefault);
 
         await Assert.That(built.ChatTemplateKwargs?.EnableThinking).IsTrue();
         await Assert.That(built.ChatTemplateKwargs?.Thinking).IsTrue();
@@ -103,21 +106,59 @@ public sealed class NimRequestBuilderTests
     /// <returns>A task that completes when the assertion has run.</returns>
     [Test]
     public async Task PlainTurnSendsNoTemplateArguments() =>
-        await Assert.That(NimRequestBuilder.Build(Request(), UpstreamModel, false, Options).ChatTemplateKwargs)
+        await Assert.That(NimRequestBuilder.Build(Request(), UpstreamModel, false, Options, CatalogDefault).ChatTemplateKwargs)
             .IsNull();
 
-    /// <summary>The configured ceiling bounds an oversized request.</summary>
+    /// <summary>The model's own documented ceiling bounds an oversized request.</summary>
     /// <returns>A task that completes when the assertion has run.</returns>
+    /// <remarks>
+    /// This is a regression test for a live defect. One configured number bounded every model, and
+    /// at its 4096 default a reasoning model spent the whole allowance on its trace and stopped on
+    /// length with no answer written — which a client reads as the model having nothing to say. It
+    /// is also the number the listing advertises, so the ceiling a client is told about and the
+    /// one its turn is held to are now the same.
+    /// </remarks>
     [Test]
-    public async Task OutputCeilingIsApplied()
+    public async Task OutputCeilingComesFromTheModel()
     {
         var request = new MessagesRequest(
             ClaudeModel,
-            [new AnthropicMessage(AnthropicMessage.UserRole, MessageContent.FromText("hello"))],
+            [new AnthropicMessage(AnthropicMessage.UserRole, MessageContent.FromText(UserText))],
             OversizedMaxTokens);
 
         var bounded = Options with { MaxTokens = ConfiguredCeiling };
-        var built = NimRequestBuilder.Build(request, UpstreamModel, false, bounded);
+        var built = NimRequestBuilder.Build(request, UpstreamModel, false, bounded, CatalogDefault);
+
+        await Assert.That(built.MaxTokens).IsEqualTo(NimModelCatalogDefaults.NemotronThreeMaxOutputTokens);
+    }
+
+    /// <summary>A model the catalogue does not size is bounded by the configured default.</summary>
+    /// <returns>A task that completes when the assertion has run.</returns>
+    [Test]
+    public async Task UnsizedModelFallsBackToTheCatalogueDefault()
+    {
+        var request = new MessagesRequest(
+            ClaudeModel,
+            [new AnthropicMessage(AnthropicMessage.UserRole, MessageContent.FromText(UserText))],
+            OversizedMaxTokens);
+
+        var built = NimRequestBuilder.Build(request, "some/model-nobody-has-heard-of", false, Options, CatalogDefault);
+
+        await Assert.That(built.MaxTokens).IsEqualTo(CatalogDefault);
+    }
+
+    /// <summary>A caller naming no length gets the configured one rather than the model's whole ceiling.</summary>
+    /// <returns>A task that completes when the assertion has run.</returns>
+    [Test]
+    public async Task UnspecifiedLengthUsesTheConfiguredDefault()
+    {
+        var request = new MessagesRequest(
+            ClaudeModel,
+            [new AnthropicMessage(AnthropicMessage.UserRole, MessageContent.FromText(UserText))],
+            0);
+
+        var bounded = Options with { MaxTokens = ConfiguredCeiling };
+        var built = NimRequestBuilder.Build(request, UpstreamModel, false, bounded, CatalogDefault);
 
         await Assert.That(built.MaxTokens).IsEqualTo(ConfiguredCeiling);
     }
@@ -133,7 +174,7 @@ public sealed class NimRequestBuilderTests
     {
         var request = RequestWithImage();
 
-        var built = NimRequestBuilder.Build(request, VisionModel, false, Options);
+        var built = NimRequestBuilder.Build(request, VisionModel, false, Options, CatalogDefault);
 
         var message = UserMessage(built);
         await Assert.That(message.Content?.IsText).IsFalse();
@@ -149,7 +190,7 @@ public sealed class NimRequestBuilderTests
     {
         var request = RequestWithImage();
 
-        var built = NimRequestBuilder.Build(request, UpstreamModel, false, Options);
+        var built = NimRequestBuilder.Build(request, UpstreamModel, false, Options, CatalogDefault);
 
         var message = UserMessage(built);
         await Assert.That(message.Content?.IsText).IsTrue();
@@ -171,7 +212,7 @@ public sealed class NimRequestBuilderTests
             [new AnthropicMessage(AnthropicMessage.UserRole, MessageContent.FromBlocks(blocks))],
             RequestedMaxTokens);
 
-        var built = NimRequestBuilder.Build(request, VisionModel, false, Options);
+        var built = NimRequestBuilder.Build(request, VisionModel, false, Options, CatalogDefault);
 
         var message = UserMessage(built);
         await Assert.That(message.Content?.IsText).IsTrue();
@@ -185,7 +226,7 @@ public sealed class NimRequestBuilderTests
     {
         var request = RequestWithFormat();
 
-        var built = NimRequestBuilder.Build(request, UpstreamModel, false, Options);
+        var built = NimRequestBuilder.Build(request, UpstreamModel, false, Options, CatalogDefault);
 
         var format = built.ResponseFormat;
         await Assert.That(format).IsNotNull();
@@ -205,7 +246,7 @@ public sealed class NimRequestBuilderTests
     [Test]
     public async Task StructuredOutputCarriesASchemaName()
     {
-        var built = NimRequestBuilder.Build(RequestWithFormat(), UpstreamModel, false, Options);
+        var built = NimRequestBuilder.Build(RequestWithFormat(), UpstreamModel, false, Options, CatalogDefault);
 
         var schema = built.ResponseFormat!.Value.GetProperty(JsonSchema);
         await Assert.That(schema.TryGetProperty("name", out var name)).IsTrue();
@@ -216,7 +257,7 @@ public sealed class NimRequestBuilderTests
     /// <returns>A task that completes when the assertion has run.</returns>
     [Test]
     public async Task AbsentOutputFormatSendsNoResponseFormat() =>
-        await Assert.That(NimRequestBuilder.Build(Request(), UpstreamModel, false, Options).ResponseFormat)
+        await Assert.That(NimRequestBuilder.Build(Request(), UpstreamModel, false, Options, CatalogDefault).ResponseFormat)
             .IsNull();
 
     /// <summary>Finds the single user message in an upstream request.</summary>

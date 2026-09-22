@@ -289,6 +289,7 @@ public sealed class MessagesEndpointExtensionsTests
             client,
             new RequestGate(new RateLimitOptions(RequestsPerWindow: 0, MaxConcurrency: 0)),
             new NvidiaNimOptions(),
+            new ModelCatalogOptions(),
             new OptimizationOptions(),
             new HttpTimeoutOptions(),
             NullLogger<MessageServices>.Instance);
@@ -304,6 +305,7 @@ public sealed class MessagesEndpointExtensionsTests
             client,
             new RequestGate(new RateLimitOptions(RequestsPerWindow: 0, MaxConcurrency: 0)),
             new NvidiaNimOptions(),
+            new ModelCatalogOptions(),
             new OptimizationOptions(),
             new HttpTimeoutOptions(),
             logger);

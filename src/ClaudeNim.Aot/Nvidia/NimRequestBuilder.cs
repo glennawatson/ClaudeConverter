@@ -17,19 +17,24 @@ public static class NimRequestBuilder
     /// <param name="model">The NIM model the router selected.</param>
     /// <param name="thinkingEnabled">Whether reasoning was requested for this tier.</param>
     /// <param name="options">The configured NIM defaults.</param>
+    /// <param name="defaultMaxOutputTokens">The output ceiling to assume for a model NVIDIA does not size.</param>
     /// <returns>The upstream request body.</returns>
     public static NimChatRequest Build(
         MessagesRequest request,
         string model,
         bool thinkingEnabled,
-        NvidiaNimOptions options)
+        NvidiaNimOptions options,
+        int defaultMaxOutputTokens)
     {
         ArgumentNullException.ThrowIfNull(request);
         ArgumentNullException.ThrowIfNull(options);
 
         var messages = BuildMessages(request, thinkingEnabled, NimModelCatalogDefaults.SupportsVision(model));
         var tools = BuildTools(request.Tools);
-        var maxTokens = ResolveMaxTokens(request.MaxTokens, options.MaxTokens);
+        var maxTokens = ResolveMaxTokens(
+            request.MaxTokens,
+            NimModelCatalogDefaults.MaxOutputTokens(model, defaultMaxOutputTokens),
+            options.MaxTokens);
 
         // Usage is only reported on a streamed turn when it is asked for up front. Without it
         // the output token count has to be guessed from response length.
@@ -65,18 +70,27 @@ public static class NimRequestBuilder
             Extensions: BuildExtensions(request, thinkingEnabled));
     }
 
-    /// <summary>Resolves the maximum tokens by selecting the smaller of requested and configured ceiling.</summary>
+    /// <summary>Resolves the completion length, bounded by what the model can actually produce.</summary>
     /// <param name="requested">The caller's requested max tokens.</param>
-    /// <param name="ceiling">The configured maximum ceiling.</param>
+    /// <param name="modelCeiling">The largest completion the model is documented to allow.</param>
+    /// <param name="whenUnspecified">The length to use when the caller asks for none.</param>
     /// <returns>The effective maximum tokens.</returns>
-    private static int ResolveMaxTokens(int requested, int ceiling)
+    /// <remarks>
+    /// The bound is the model's, not the configuration's. A single number applied across the
+    /// catalogue is wrong for every model it does not describe, and being wrong downwards is not
+    /// the safe direction it looks: a reasoning model given less than its trace costs returns the
+    /// trace and no answer, so the turn is lost rather than shortened.
+    /// </remarks>
+    private static int ResolveMaxTokens(int requested, int modelCeiling, int whenUnspecified)
     {
-        if (requested <= 0)
+        var wanted = requested > 0 ? requested : whenUnspecified;
+
+        if (wanted <= 0)
         {
-            return ceiling;
+            return modelCeiling;
         }
 
-        return ceiling > 0 && requested > ceiling ? ceiling : requested;
+        return modelCeiling > 0 && wanted > modelCeiling ? modelCeiling : wanted;
     }
 
     /// <summary>Translates an Anthropic structured-output request into NIM's <c>response_format</c>.</summary>
