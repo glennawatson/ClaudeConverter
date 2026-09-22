@@ -104,4 +104,13 @@ internal static partial class NvidiaLog
         Level = LogLevel.Information,
         Message = "Falling back to the built-in NVIDIA NIM model list.")]
     internal static partial void UsingBuiltInModelList(ILogger logger);
+
+    /// <summary>Records that a Messages API turn's own upstream call failed at the transport level.</summary>
+    /// <param name="logger">The log to write to.</param>
+    /// <param name="error">The transport failure.</param>
+    [LoggerMessage(
+        EventId = 1009,
+        Level = LogLevel.Warning,
+        Message = "The upstream connection failed or timed out before a response arrived.")]
+    internal static partial void LogUpstreamTransportFailure(ILogger logger, Exception error);
 }

@@ -91,21 +91,46 @@ public static class MessagesEndpointExtensions
                 "The proxy's own rate limit is saturated; retry shortly.");
         }
 
-        using var response = await services.Client
-            .SendChatAsync(upstreamRequest, cancellationToken)
-            .ConfigureAwait(false);
-
-        if (!response.IsSuccessStatusCode)
+        HttpResponseMessage response;
+        try
         {
-            return await UpstreamFailureAsync(response, cancellationToken).ConfigureAwait(false);
+            response = await services.Client.SendChatAsync(upstreamRequest, cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception error) when (IsUpstreamTransportFailure(error) && !cancellationToken.IsCancellationRequested)
+        {
+            NvidiaLog.LogUpstreamTransportFailure(services.Logger, error);
+            return AnthropicErrors.Result(
+                StatusCodes.Status503ServiceUnavailable,
+                "The upstream connection failed or timed out before a response arrived.");
         }
 
-        return request.IsStreaming
-            ? await StreamAsync(response, context, request, resolved, messageId, services, cancellationToken)
-                .ConfigureAwait(false)
-            : await CompleteAsync(response, request, resolved, messageId, services.Timeouts, cancellationToken)
-                .ConfigureAwait(false);
+        using (response)
+        {
+            if (!response.IsSuccessStatusCode)
+            {
+                return await UpstreamFailureAsync(response, cancellationToken).ConfigureAwait(false);
+            }
+
+            return request.IsStreaming
+                ? await StreamAsync(response, context, request, resolved, messageId, services, cancellationToken)
+                    .ConfigureAwait(false)
+                : await CompleteAsync(response, request, resolved, messageId, services.Timeouts, cancellationToken)
+                    .ConfigureAwait(false);
+        }
     }
+
+    /// <summary>Determines whether an exception represents a failed or timed-out upstream connection.</summary>
+    /// <param name="error">The exception the upstream call raised.</param>
+    /// <returns><see langword="true"/> when the exception is a transport-level failure rather than a caller cancellation.</returns>
+    /// <remarks>
+    /// <see cref="NimClient"/> bounds its own call with an internal deadline, so a slow or dropped
+    /// upstream surfaces here as <see cref="OperationCanceledException"/> or
+    /// <see cref="HttpRequestException"/> rather than a non-success status code. Left uncaught, this
+    /// reached Kestrel as an unhandled exception and the client saw a bare connection failure instead
+    /// of an <c>overloaded_error</c> it could back off on.
+    /// </remarks>
+    private static bool IsUpstreamTransportFailure(Exception error) =>
+        error is HttpRequestException or OperationCanceledException or IOException;
 
     /// <summary>Validates that a request carries the fields every turn needs.</summary>
     /// <param name="request">The caller's request, which may be null or incompletely bound.</param>

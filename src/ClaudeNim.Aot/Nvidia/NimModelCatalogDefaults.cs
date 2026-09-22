@@ -46,7 +46,6 @@ public static class NimModelCatalogDefaults
             SupportsThinking: true,
             NemotronThreeContextWindow,
             NemotronThreeMaxOutputTokens),
-        new("nvidia/nemotron-nano-3-30b-a3b", "Nemotron Nano 3 30B A3B", true, false, true),
         new("nvidia/nemotron-3.5-lightning-30b-a3b", "Nemotron 3.5 Lightning 30B A3B", true, false, true),
         new(
             "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning",
@@ -54,17 +53,16 @@ public static class NimModelCatalogDefaults
             SupportsTools: true,
             SupportsVision: true,
             SupportsThinking: true),
-        new("nvidia/llama-3.1-nemotron-ultra-253b-v1", "Llama 3.1 Nemotron Ultra 253B v1", true, false, true),
         new("z-ai/glm-5.3", "GLM 5.3", true, false, true),
         new("z-ai/glm-5.3-flash", "GLM 5.3 Flash", true, true, true),
         new("moonshotai/kimi-k3", "Kimi K3", true, true, true),
-        new("moonshotai/kimi-k2.6", "Kimi K2.6", true, true, true),
-        new("deepseek-ai/deepseek-coder-6.7b-instruct", "DeepSeek Coder 6.7B Instruct", true, false, false),
+        new("deepseek-ai/deepseek-v4.1-flash", "DeepSeek V4.1 Flash", true, false, true),
         new("meta/muse-glimmer-30b", "Muse Glimmer 30B", true, true, true),
         new("poolside/laguna-xs-2.1", "Laguna XS 2.1", true, false, true),
         new("google/gemma-4-31b-it", "Gemma 4 31B IT", true, false, false),
         new("openai/gpt-oss-20b", "GPT-OSS 20B", true, false, true),
         new("mistralai/mistral-nemotron", "Mistral Nemotron", true, false, false),
+        new("meta/llama-3.2-11b-vision-instruct", "Llama 3.2 11B Vision Instruct", false, true, false),
     ];
 
     // Substrings that identify a model serving something other than chat completions. Matched

@@ -47,9 +47,34 @@ public sealed class LiveNimTests : IDisposable
     /// <summary>A model reference used for the streamed-reasoning fixture.</summary>
     private const string UltraModel = "anthropic/nvidia_nim/nvidia/nemotron-3-ultra-550b-a55b";
 
+    /// <summary>A model reference from the GLM family, used for the cross-family vision-plus-tools fixture.</summary>
+    private const string GlmFlashModel = "anthropic/nvidia_nim/z-ai/glm-5.3-flash";
+
+    /// <summary>A model reference from the DeepSeek family, used for the cross-family tool-calling fixture.</summary>
+    /// <remarks>
+    /// <c>deepseek-ai/deepseek-coder-6.7b-instruct</c> was tried first: it is chat-shaped and appears
+    /// in the general <c>/v1/models</c> listing, but NVIDIA's chat completions endpoint answers it
+    /// with <c>404 Function ... not found for account</c> — it is listed without being invokable on
+    /// this credential's tier. <c>deepseek-ai/deepseek-v4.1-flash</c> is the model actually reachable
+    /// under NVIDIA's Free Endpoint filter.
+    /// </remarks>
+    private const string DeepSeekModel = "anthropic/nvidia_nim/deepseek-ai/deepseek-v4.1-flash";
+
+    /// <summary>A model reference from the Muse family, used for the second cross-family vision-plus-tools fixture.</summary>
+    private const string MuseGlimmerModel = "anthropic/nvidia_nim/meta/muse-glimmer-30b";
+
     /// <summary>A 1x1 PNG, used as the smallest possible real image payload.</summary>
     private const string OnePixelPng =
         "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=";
+
+    /// <summary>The serialized discriminator of an Anthropic <c>thinking</c> content block.</summary>
+    private const string ThinkingBlockMarker = "\"type\":\"thinking\"";
+
+    /// <summary>The serialized discriminator of an Anthropic <c>tool_use</c> content block.</summary>
+    private const string ToolUseBlockMarker = "\"type\":\"tool_use\"";
+
+    /// <summary>The serialized name of the shared <c>get_weather</c> fixture tool.</summary>
+    private const string GetWeatherToolNameMarker = "\"name\":\"get_weather\"";
 
     /// <summary>The app the tests run against.</summary>
     private readonly ClaudeNimAppFactory _factory = new();
@@ -198,7 +223,7 @@ public sealed class LiveNimTests : IDisposable
         var text = await response.Content.ReadAsStringAsync();
 
         await Assert.That(response.IsSuccessStatusCode).IsTrue();
-        await Assert.That(text).Contains("\"type\":\"thinking\"");
+        await Assert.That(text).Contains(ThinkingBlockMarker);
         await Assert.That(text).Contains("156");
     }
 
@@ -228,7 +253,7 @@ public sealed class LiveNimTests : IDisposable
         var text = await response.Content.ReadAsStringAsync();
 
         await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.OK);
-        await Assert.That(text).Contains("\"type\":\"tool_use\"");
+        await Assert.That(text).Contains(ToolUseBlockMarker);
         await Assert.That(text).Contains("\"type\":\"red\"");
     }
 
@@ -291,7 +316,7 @@ public sealed class LiveNimTests : IDisposable
         var text = await response.Content.ReadAsStringAsync();
 
         await Assert.That(response.IsSuccessStatusCode).IsTrue();
-        await Assert.That(text).Contains("\"type\":\"thinking\"");
+        await Assert.That(text).Contains(ThinkingBlockMarker);
         await Assert.That(text).Contains("\"type\":\"text\"");
     }
 
@@ -405,6 +430,246 @@ public sealed class LiveNimTests : IDisposable
         using var response = await PostAsync(client, MessagesPath, Body);
 
         await Assert.That(response.IsSuccessStatusCode).IsTrue();
+    }
+
+    /// <summary>A named <c>tool_choice</c> forces the model to call that tool over any other.</summary>
+    /// <returns>A task that completes when the assertion has run.</returns>
+    [Test]
+    public async Task ToolChoiceForcesTheNamedTool()
+    {
+        Skip.Unless(LiveCredential.IsAvailable, SkipReason);
+
+        const string Body = $$$"""
+        {
+          "model": "{{{SuperModel}}}",
+          "max_tokens": 150,
+          "messages": [{"role":"user","content":"What is 2+2? Just answer, do not call any tool."}],
+          "tools": [
+            {
+              "name": "add",
+              "description": "Add two numbers",
+              "input_schema": {
+                "type": "object",
+                "properties": { "a": { "type": "integer" }, "b": { "type": "integer" } },
+                "required": ["a", "b"]
+              }
+            },
+            {
+              "name": "unrelated",
+              "description": "Does nothing useful here",
+              "input_schema": {
+                "type": "object",
+                "properties": { "note": { "type": "string" } }
+              }
+            }
+          ],
+          "tool_choice": { "type": "tool", "name": "add" }
+        }
+        """;
+
+        using var client = _factory.CreateClient();
+        using var response = await PostAsync(client, MessagesPath, Body);
+        var text = await response.Content.ReadAsStringAsync();
+
+        await Assert.That(response.IsSuccessStatusCode).IsTrue();
+        await Assert.That(text).Contains("\"name\":\"add\"");
+    }
+
+    /// <summary>A <c>tool_choice</c> of <c>none</c> suppresses tool use even when tools are declared.</summary>
+    /// <returns>A task that completes when the assertion has run.</returns>
+    [Test]
+    public async Task ToolChoiceNoneSuppressesToolUse()
+    {
+        Skip.Unless(LiveCredential.IsAvailable, SkipReason);
+
+        const string Body = $$$"""
+        {
+          "model": "{{{SuperModel}}}",
+          "max_tokens": 60,
+          "messages": [{"role":"user","content":"Reply with exactly: PONG. Do not call any tool."}],
+          "tools": [{"name":"add","description":"Add two numbers","input_schema":{"type":"object","properties":{"a":{"type":"integer"},"b":{"type":"integer"}},"required":["a","b"]}}],
+          "tool_choice": {"type":"none"}
+        }
+        """;
+
+        using var client = _factory.CreateClient();
+        using var response = await PostAsync(client, MessagesPath, Body);
+        var text = await response.Content.ReadAsStringAsync();
+
+        await Assert.That(response.IsSuccessStatusCode).IsTrue();
+        await Assert.That(text).DoesNotContain(ToolUseBlockMarker);
+    }
+
+    /// <summary>A <c>tool_choice</c> of <c>any</c> forces some tool call rather than a free-form answer.</summary>
+    /// <returns>A task that completes when the assertion has run.</returns>
+    [Test]
+    public async Task ToolChoiceAnyForcesSomeTool()
+    {
+        Skip.Unless(LiveCredential.IsAvailable, SkipReason);
+
+        const string Body = $$$"""
+        {
+          "model": "{{{SuperModel}}}",
+          "max_tokens": 150,
+          "messages": [{"role":"user","content":"What is 5 plus 7?"}],
+          "tools": [{"name":"add","description":"Add two numbers","input_schema":{"type":"object","properties":{"a":{"type":"integer"},"b":{"type":"integer"}},"required":["a","b"]}}],
+          "tool_choice": {"type":"any"}
+        }
+        """;
+
+        using var client = _factory.CreateClient();
+        using var response = await PostAsync(client, MessagesPath, Body);
+        var text = await response.Content.ReadAsStringAsync();
+
+        await Assert.That(response.IsSuccessStatusCode).IsTrue();
+        await Assert.That(text).Contains(ToolUseBlockMarker);
+    }
+
+    /// <summary>An explicit <c>thinking.budget_tokens</c> request is forwarded and still produces reasoning.</summary>
+    /// <returns>A task that completes when the assertions have run.</returns>
+    [Test]
+    public async Task ExplicitThinkingBudgetStillProducesReasoning()
+    {
+        Skip.Unless(LiveCredential.IsAvailable, SkipReason);
+
+        const string Body = $$"""
+        {
+          "model": "{{OpusAlias}}",
+          "max_tokens": 200,
+          "thinking": {"type":"enabled","budget_tokens":512},
+          "messages": [{"role":"user","content":"What is 15*17? Think it through."}]
+        }
+        """;
+
+        using var client = _factory.CreateClient();
+        using var response = await PostAsync(client, MessagesPath, Body);
+        var text = await response.Content.ReadAsStringAsync();
+
+        await Assert.That(response.IsSuccessStatusCode).IsTrue();
+        await Assert.That(text).Contains(ThinkingBlockMarker);
+        await Assert.That(text).Contains("255");
+    }
+
+    /// <summary>A stop sequence ends generation at the sequence rather than the model's own choice.</summary>
+    /// <returns>A task that completes when the assertions have run.</returns>
+    [Test]
+    public async Task StopSequenceEndsGenerationEarly()
+    {
+        Skip.Unless(LiveCredential.IsAvailable, SkipReason);
+
+        const string Body = $$"""
+        {
+          "model": "{{SuperModel}}",
+          "max_tokens": 100,
+          "stop_sequences": ["3"],
+          "messages": [{"role":"user","content":"Count from 1 to 10, one number per line, nothing else."}]
+        }
+        """;
+
+        using var client = _factory.CreateClient();
+        using var response = await PostAsync(client, MessagesPath, Body);
+        var text = await response.Content.ReadAsStringAsync();
+
+        await Assert.That(response.IsSuccessStatusCode).IsTrue();
+        await Assert.That(text).DoesNotContain("\"7\"");
+    }
+
+    /// <summary>A file-reading command's output is answered locally with the file it named.</summary>
+    /// <returns>A task that completes when the assertion has run.</returns>
+    [Test]
+    public async Task FilePathExtractionIsAnsweredLocally()
+    {
+        Skip.Unless(LiveCredential.IsAvailable, SkipReason);
+
+        const string Body = """
+        {
+          "model": "claude-sonnet-5",
+          "max_tokens": 30,
+          "messages": [{"role":"user","content":"Command:\ncat notes.txt\nOutput:\nsome content\nList the filepaths in <filepaths></filepaths>"}]
+        }
+        """;
+
+        using var client = _factory.CreateClient();
+        using var response = await PostAsync(client, MessagesPath, Body);
+        var text = await response.Content.ReadAsStringAsync();
+
+        await Assert.That(response.IsSuccessStatusCode).IsTrue();
+        await Assert.That(text).Contains("notes.txt");
+    }
+
+    /// <summary>A Muse-family model, a second reasoning-plus-vision vendor, still answers with a clean tool_use block.</summary>
+    /// <returns>A task that completes when the assertions have run.</returns>
+    [Test]
+    public async Task MuseGlimmerFamilyModelToolCallWorks()
+    {
+        Skip.Unless(LiveCredential.IsAvailable, SkipReason);
+
+        const string Body = $$$"""
+        {
+          "model": "{{{MuseGlimmerModel}}}",
+          "max_tokens": 150,
+          "messages": [{"role":"user","content":"Call the get_weather tool for Paris."}],
+          "tools": [{"name":"get_weather","description":"Get weather","input_schema":{"type":"object","properties":{"city":{"type":"string"}},"required":["city"]}}]
+        }
+        """;
+
+        using var client = _factory.CreateClient();
+        using var response = await PostAsync(client, MessagesPath, Body);
+        var text = await response.Content.ReadAsStringAsync();
+
+        await Assert.That(response.IsSuccessStatusCode).IsTrue();
+        await Assert.That(text).Contains(ToolUseBlockMarker);
+        await Assert.That(text).Contains(GetWeatherToolNameMarker);
+    }
+
+    /// <summary>A GLM-family model answers a tool call, exercising a second vendor's function-calling wrapper.</summary>
+    /// <returns>A task that completes when the assertions have run.</returns>
+    [Test]
+    public async Task GlmFamilyModelToolCallWorks()
+    {
+        Skip.Unless(LiveCredential.IsAvailable, SkipReason);
+
+        const string Body = $$$"""
+        {
+          "model": "{{{GlmFlashModel}}}",
+          "max_tokens": 150,
+          "messages": [{"role":"user","content":"Call the get_weather tool for Tokyo."}],
+          "tools": [{"name":"get_weather","description":"Get weather","input_schema":{"type":"object","properties":{"city":{"type":"string"}},"required":["city"]}}]
+        }
+        """;
+
+        using var client = _factory.CreateClient();
+        using var response = await PostAsync(client, MessagesPath, Body);
+        var text = await response.Content.ReadAsStringAsync();
+
+        await Assert.That(response.IsSuccessStatusCode).IsTrue();
+        await Assert.That(text).Contains(ToolUseBlockMarker);
+        await Assert.That(text).Contains(GetWeatherToolNameMarker);
+    }
+
+    /// <summary>A DeepSeek-family model, a family previously seen rendering tool calls as marker tokens, still answers with a clean tool call.</summary>
+    /// <returns>A task that completes when the assertions have run.</returns>
+    [Test]
+    public async Task DeepSeekFamilyModelToolCallWorks()
+    {
+        Skip.Unless(LiveCredential.IsAvailable, SkipReason);
+
+        const string Body = $$$"""
+        {
+          "model": "{{{DeepSeekModel}}}",
+          "max_tokens": 150,
+          "messages": [{"role":"user","content":"Call the get_weather tool for Berlin."}],
+          "tools": [{"name":"get_weather","description":"Get weather","input_schema":{"type":"object","properties":{"city":{"type":"string"}},"required":["city"]}}]
+        }
+        """;
+
+        using var client = _factory.CreateClient();
+        using var response = await PostAsync(client, MessagesPath, Body);
+        var text = await response.Content.ReadAsStringAsync();
+
+        await Assert.That(response.IsSuccessStatusCode).IsTrue();
+        await Assert.That(text).Contains(ToolUseBlockMarker);
+        await Assert.That(text).Contains(GetWeatherToolNameMarker);
     }
 
     /// <summary>Gets a route relative to the running app.</summary>

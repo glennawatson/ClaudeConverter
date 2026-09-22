@@ -48,6 +48,16 @@ public sealed record ThinkTagParser
     /// <summary>The non-whitespace answer characters emitted so far.</summary>
     private int _answerLength;
 
+    /// <summary>Tracks whether a real open or close tag has been consumed yet.</summary>
+    /// <remarks>
+    /// Some chat templates seed the assistant turn with an opening <c>&lt;think&gt;</c> themselves,
+    /// so the model's own completion text never contains one — only the closing tag it writes once
+    /// reasoning ends. Without tracking this, that stray <c>&lt;/think&gt;</c> is never recognised
+    /// (the parser is only ever looking for an opening tag while <c>_insideThink</c> is false), and
+    /// both the reasoning prose and the literal tag leak into the answer as plain text.
+    /// </remarks>
+    private bool _sawAnyTag;
+
     /// <summary>Consumes a chunk of model output and appends any completed runs.</summary>
     /// <param name="chunk">The incoming content fragment.</param>
     /// <param name="segments">The list completed runs are appended to.</param>
@@ -60,48 +70,10 @@ public sealed record ThinkTagParser
             _ = _buffer.Append(chunk);
         }
 
-        while (_buffer.Length > 0)
+        var resolvable = true;
+        while (resolvable && _buffer.Length > 0)
         {
-            var text = _buffer.ToString();
-
-            // Past the threshold an opening tag is ordinary prose, so nothing is searched for and
-            // the rest of the answer is released as it arrives.
-            if (!_insideThink && _answerLength >= LiteralTagThreshold)
-            {
-                Emit(segments, text);
-                _ = _buffer.Clear();
-                break;
-            }
-
-            var tag = _insideThink ? CloseTag : OpenTag;
-            var index = text.IndexOf(tag, StringComparison.Ordinal);
-
-            if (index >= 0)
-            {
-                // The prefix before this tag has not been counted yet, so an opening tag reached
-                // only by way of a long prefix in the same chunk must be checked here too, not
-                // just against the total left over from earlier chunks.
-                if (!_insideThink && _answerLength + CountVisible(text[..index]) >= LiteralTagThreshold)
-                {
-                    Emit(segments, text);
-                    _ = _buffer.Clear();
-                    break;
-                }
-
-                Emit(segments, text[..index]);
-                _ = _buffer.Remove(0, index + tag.Length);
-                _insideThink = !_insideThink;
-                continue;
-            }
-
-            var safe = SafeLength(text, tag);
-            if (safe > 0)
-            {
-                Emit(segments, text[..safe]);
-                _ = _buffer.Remove(0, safe);
-            }
-
-            break;
+            resolvable = ConsumeOnce(segments);
         }
     }
 
@@ -178,5 +150,91 @@ public sealed record ThinkTagParser
         }
 
         segments.Add(new(_insideThink, text));
+    }
+
+    /// <summary>Resolves as much of the buffer as one call can, without looping.</summary>
+    /// <param name="segments">The list completed runs are appended to.</param>
+    /// <returns><see langword="true"/> when the buffer may still hold another resolvable run.</returns>
+    private bool ConsumeOnce(List<ThinkTagSegment> segments)
+    {
+        var text = _buffer.ToString();
+
+        if (TryFlushPastThreshold(text, 0, segments))
+        {
+            return false;
+        }
+
+        if (!_insideThink && !_sawAnyTag && TryHandleImplicitOpen(text, segments))
+        {
+            return true;
+        }
+
+        var tag = _insideThink ? CloseTag : OpenTag;
+        var index = text.IndexOf(tag, StringComparison.Ordinal);
+
+        if (index >= 0)
+        {
+            // The prefix before this tag has not been counted yet, so an opening tag reached only
+            // by way of a long prefix in the same chunk must be checked here too, not just against
+            // the total left over from earlier chunks.
+            if (TryFlushPastThreshold(text, CountVisible(text[..index]), segments))
+            {
+                return false;
+            }
+
+            Emit(segments, text[..index]);
+            _ = _buffer.Remove(0, index + tag.Length);
+            _insideThink = !_insideThink;
+            _sawAnyTag = true;
+            return true;
+        }
+
+        var safe = SafeLength(text, tag);
+        if (safe > 0)
+        {
+            Emit(segments, text[..safe]);
+            _ = _buffer.Remove(0, safe);
+        }
+
+        return false;
+    }
+
+    /// <summary>Flushes the whole buffer as answer text once the literal-tag threshold is passed.</summary>
+    /// <param name="text">The buffered text.</param>
+    /// <param name="pendingVisible">Visible characters not yet counted in <see cref="_answerLength"/>.</param>
+    /// <param name="segments">The list completed runs are appended to.</param>
+    /// <returns><see langword="true"/> when the buffer was flushed.</returns>
+    private bool TryFlushPastThreshold(string text, int pendingVisible, List<ThinkTagSegment> segments)
+    {
+        if (_insideThink || _answerLength + pendingVisible < LiteralTagThreshold)
+        {
+            return false;
+        }
+
+        Emit(segments, text);
+        _ = _buffer.Clear();
+        return true;
+    }
+
+    /// <summary>Handles a closing tag reached before any opening tag has ever been seen.</summary>
+    /// <param name="text">The buffered text to scan.</param>
+    /// <param name="segments">The list completed runs are appended to.</param>
+    /// <returns><see langword="true"/> when an implicit open was found and consumed.</returns>
+    private bool TryHandleImplicitOpen(string text, List<ThinkTagSegment> segments)
+    {
+        var openIndex = text.IndexOf(OpenTag, StringComparison.Ordinal);
+        var closeIndex = text.IndexOf(CloseTag, StringComparison.Ordinal);
+
+        if (closeIndex < 0 || (openIndex >= 0 && openIndex <= closeIndex))
+        {
+            return false;
+        }
+
+        _insideThink = true;
+        Emit(segments, text[..closeIndex]);
+        _insideThink = false;
+        _sawAnyTag = true;
+        _ = _buffer.Remove(0, closeIndex + CloseTag.Length);
+        return true;
     }
 }

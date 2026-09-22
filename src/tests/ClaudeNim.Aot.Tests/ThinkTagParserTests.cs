@@ -114,6 +114,35 @@ public sealed class ThinkTagParserTests
         await Assert.That(Join(segments, thinking: false)).IsEqualTo(Answer);
     }
 
+    /// <summary>A closing tag with no opening tag treats everything before it as reasoning.</summary>
+    /// <returns>A task that completes when the assertions have run.</returns>
+    /// <remarks>
+    /// Some chat templates seed the assistant turn with the opening <c>&lt;think&gt;</c> themselves,
+    /// so the model's own completion text carries only the closing tag. This is a regression test
+    /// for a live defect: without this handling the reasoning prose and the literal closing tag both
+    /// leaked into the answer, because the parser only ever looked for an opening tag while not
+    /// already inside one.
+    /// </remarks>
+    [Test]
+    public async Task ImplicitOpenTreatsLeadingTextAsReasoning()
+    {
+        var segments = Run($"reasoning with no opening tag</think>{Answer}");
+
+        await Assert.That(Join(segments, thinking: true)).IsEqualTo("reasoning with no opening tag");
+        await Assert.That(Join(segments, thinking: false)).IsEqualTo(Answer);
+    }
+
+    /// <summary>A stray closing tag deep in the answer, after a real pair, is not treated as an implicit open.</summary>
+    /// <returns>A task that completes when the assertions have run.</returns>
+    [Test]
+    public async Task StrayClosingTagAfterARealPairIsLiteral()
+    {
+        var segments = Run("<think>reasoning</think>the tag is </think> here");
+
+        await Assert.That(Join(segments, thinking: true)).IsEqualTo("reasoning");
+        await Assert.That(Join(segments, thinking: false)).IsEqualTo("the tag is </think> here");
+    }
+
     /// <summary>Feeds a sequence of chunks and flushes.</summary>
     /// <param name="chunks">The chunks to feed, in order.</param>
     /// <returns>The segments produced.</returns>
