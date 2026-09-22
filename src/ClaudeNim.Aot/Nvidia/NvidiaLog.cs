@@ -271,6 +271,36 @@ internal static partial class NvidiaLog
         Message = "Upstream request body: {Body}")]
     internal static partial void UpstreamRequestBody(ILogger logger, string body);
 
+    /// <summary>Records a tool call the proxy lifted out of answer text rather than being handed.</summary>
+    /// <param name="logger">The log to write to.</param>
+    /// <param name="tool">The tool the recovered call names.</param>
+    /// <remarks>
+    /// The two ways a call reaches a client are indistinguishable once it gets there, and they
+    /// fail differently: a call NIM parsed carries the model's arguments verbatim, while a
+    /// recovered one carries arguments this proxy assembled from marker tokens. When a call
+    /// arrives with arguments that make no sense, that is the first thing worth knowing, and
+    /// without this line it cannot be told from the log at all.
+    /// </remarks>
+    [LoggerMessage(
+        EventId = 1020,
+        Level = LogLevel.Warning,
+        Message = "Recovered a {Tool} call from answer text; its arguments were assembled here, not parsed by NIM.")]
+    internal static partial void EmbeddedToolCallRecovered(ILogger logger, string tool);
+
+    /// <summary>Records the whole body of a non-streamed upstream response.</summary>
+    /// <param name="logger">The log to write to.</param>
+    /// <param name="body">The upstream response body.</param>
+    /// <remarks>
+    /// <see cref="RawStreamLine"/> does this for a streamed turn and had no counterpart here, so a
+    /// non-streamed turn that translated cleanly into wrong content could not be compared against
+    /// what NIM actually sent. Debug-only, since a turn's body can be large.
+    /// </remarks>
+    [LoggerMessage(
+        EventId = 1021,
+        Level = LogLevel.Debug,
+        Message = "Upstream response body: {Body}")]
+    internal static partial void UpstreamResponseBody(ILogger logger, string body);
+
     /// <summary>Records one raw line read from a streamed upstream response.</summary>
     /// <param name="logger">The log to write to.</param>
     /// <param name="line">The raw line, including lines this proxy already parses successfully.</param>

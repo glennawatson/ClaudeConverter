@@ -347,6 +347,27 @@ public static class MessagesEndpointExtensions
         return null;
     }
 
+    /// <summary>Reads a non-streamed body, recording it before it is parsed.</summary>
+    /// <param name="response">The upstream response.</param>
+    /// <param name="logger">The diagnostic log.</param>
+    /// <param name="cancellationToken">Abandons the read when the client disconnects.</param>
+    /// <returns>The parsed completion.</returns>
+    /// <remarks>
+    /// Only taken when debug logging is on, because it buffers the whole body as text first. The
+    /// streamed path records every line it reads; without this, a non-streamed turn that
+    /// translated cleanly into wrong content could not be compared against what NIM actually sent.
+    /// </remarks>
+    private static async Task<NimChatCompletion?> ReadLoggedCompletionAsync(
+        HttpResponseMessage response,
+        ILogger logger,
+        CancellationToken cancellationToken)
+    {
+        var body = await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
+        NvidiaLog.UpstreamResponseBody(logger, body);
+
+        return JsonSerializer.Deserialize(body, ProxyJsonContext.Default.NimChatCompletion);
+    }
+
     /// <summary>Writes the error event for a transport failure reached before any chunk could be read.</summary>
     /// <param name="writer">The writer the event is emitted through.</param>
     /// <param name="cancellationToken">Abandons the write when the client disconnects.</param>
@@ -385,9 +406,11 @@ public static class MessagesEndpointExtensions
         NimChatCompletion? completion;
         try
         {
-            completion = await response.Content
-                .ReadFromJsonAsync(ProxyJsonContext.Default.NimChatCompletion, bodyTimeout.Token)
-                .ConfigureAwait(false);
+            completion = services.Logger.IsEnabled(LogLevel.Debug)
+                ? await ReadLoggedCompletionAsync(response, services.Logger, bodyTimeout.Token).ConfigureAwait(false)
+                : await response.Content
+                    .ReadFromJsonAsync(ProxyJsonContext.Default.NimChatCompletion, bodyTimeout.Token)
+                    .ConfigureAwait(false);
         }
         catch (Exception error) when (IsUpstreamTransportFailure(error) && !cancellationToken.IsCancellationRequested)
         {
@@ -402,7 +425,8 @@ public static class MessagesEndpointExtensions
             messageId,
             request.Model,
             TokenEstimator.Estimate(request.Messages, request.System, request.Tools),
-            resolved.ThinkingEnabled);
+            resolved.ThinkingEnabled,
+            services.Logger);
 
         return TypedResults.Json(message, ProxyJsonContext.Default.MessagesResponse);
     }

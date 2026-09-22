@@ -477,6 +477,8 @@ public sealed class NimStreamTranslator(
         await CloseTextAsync(cancellationToken).ConfigureAwait(false);
         await CloseThinkingAsync(cancellationToken).ConfigureAwait(false);
 
+        NvidiaLog.EmbeddedToolCallRecovered(logger, run.Name);
+
         var index = _nextBlockIndex++;
         var identifier = $"toolu_{Guid.NewGuid():N}";
 

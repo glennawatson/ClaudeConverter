@@ -3,6 +3,9 @@
 // See the LICENSE file in the project root for full license information.
 using ClaudeNim.Aot.Anthropic;
 using ClaudeNim.Aot.Nvidia;
+using ClaudeNim.Aot.Tests.Fakes;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 
 namespace ClaudeNim.Aot.Tests;
 
@@ -50,7 +53,7 @@ public sealed class NimCompletionTranslatorTests
     [Test]
     public async Task AbsentCompletionYieldsAPlaceholderBlock()
     {
-        var message = NimCompletionTranslator.Translate(null, MessageId, EchoedModel, InputTokens, thinkingEnabled: true);
+        var message = NimCompletionTranslator.Translate(null, MessageId, EchoedModel, InputTokens, thinkingEnabled: true, NullLogger.Instance);
 
         await Assert.That(message.Content.Count).IsEqualTo(1);
         await Assert.That(message.Content[0].Text).IsEqualTo(" ");
@@ -64,7 +67,7 @@ public sealed class NimCompletionTranslatorTests
     {
         var completion = Completion(new(AssistantRole, NimContent.FromText("hello there")));
 
-        var message = NimCompletionTranslator.Translate(completion, MessageId, EchoedModel, InputTokens, thinkingEnabled: true);
+        var message = NimCompletionTranslator.Translate(completion, MessageId, EchoedModel, InputTokens, thinkingEnabled: true, NullLogger.Instance);
 
         await Assert.That(message.Content.Count).IsEqualTo(1);
         await Assert.That(message.Content[0].Type).IsEqualTo("text");
@@ -79,7 +82,7 @@ public sealed class NimCompletionTranslatorTests
         var choice = new NimChoice(Message: new NimChatMessage(AssistantRole, NimContent.FromText("done"), ReasoningContent: ReasoningText));
         var completion = new NimChatCompletion(Choices: [choice]);
 
-        var message = NimCompletionTranslator.Translate(completion, MessageId, EchoedModel, InputTokens, thinkingEnabled: true);
+        var message = NimCompletionTranslator.Translate(completion, MessageId, EchoedModel, InputTokens, thinkingEnabled: true, NullLogger.Instance);
 
         await Assert.That(message.Content.Exists(static b => b.Type == ThinkingBlockType && b.Thinking == ReasoningText)).IsTrue();
     }
@@ -92,7 +95,7 @@ public sealed class NimCompletionTranslatorTests
         var choice = new NimChoice(Message: new NimChatMessage(AssistantRole, NimContent.FromText("done"), ReasoningContent: ReasoningText));
         var completion = new NimChatCompletion(Choices: [choice]);
 
-        var message = NimCompletionTranslator.Translate(completion, MessageId, EchoedModel, InputTokens, thinkingEnabled: false);
+        var message = NimCompletionTranslator.Translate(completion, MessageId, EchoedModel, InputTokens, thinkingEnabled: false, NullLogger.Instance);
 
         await Assert.That(message.Content.Exists(static b => b.Type == ThinkingBlockType)).IsFalse();
     }
@@ -104,7 +107,7 @@ public sealed class NimCompletionTranslatorTests
     {
         var completion = Completion(new(AssistantRole, NimContent.FromText("<think>reasoning</think>answer")));
 
-        var message = NimCompletionTranslator.Translate(completion, MessageId, EchoedModel, InputTokens, thinkingEnabled: true);
+        var message = NimCompletionTranslator.Translate(completion, MessageId, EchoedModel, InputTokens, thinkingEnabled: true, NullLogger.Instance);
 
         await Assert.That(message.Content.Exists(static b => b.Type == ThinkingBlockType && b.Thinking == "reasoning")).IsTrue();
         await Assert.That(message.Content.Exists(static b => b.Type == "text" && b.Text == "answer")).IsTrue();
@@ -119,9 +122,9 @@ public sealed class NimCompletionTranslatorTests
         var message0 = new NimChatMessage(AssistantRole, null, ToolCalls: [call]);
         var completion = new NimChatCompletion(Choices: [new NimChoice(Message: message0, FinishReason: "tool_calls")]);
 
-        var message = NimCompletionTranslator.Translate(completion, MessageId, EchoedModel, InputTokens, thinkingEnabled: true);
+        var message = NimCompletionTranslator.Translate(completion, MessageId, EchoedModel, InputTokens, thinkingEnabled: true, NullLogger.Instance);
 
-        var block = message.Content.Find(static b => b.Type == "tool_use");
+        var block = message.Content.Find(static b => b.Type == ToolUseType);
         await Assert.That(block).IsNotNull();
         await Assert.That(block!.Name).IsEqualTo(ToolName);
         await Assert.That(block.Id).IsEqualTo("call_1");
@@ -136,9 +139,9 @@ public sealed class NimCompletionTranslatorTests
         const string Text = "<|tool_call_begin|>search<|tool_call_argument_begin|>{}<|tool_call_end|>";
         var completion = Completion(new(AssistantRole, NimContent.FromText(Text)));
 
-        var message = NimCompletionTranslator.Translate(completion, MessageId, EchoedModel, InputTokens, thinkingEnabled: true);
+        var message = NimCompletionTranslator.Translate(completion, MessageId, EchoedModel, InputTokens, thinkingEnabled: true, NullLogger.Instance);
 
-        await Assert.That(message.Content.Exists(static b => b.Type == "tool_use" && b.Name == ToolName)).IsTrue();
+        await Assert.That(message.Content.Exists(static b => b.Type == ToolUseType && b.Name == ToolName)).IsTrue();
     }
 
     /// <summary>Usage reported by the upstream is used verbatim, rather than the estimate.</summary>
@@ -151,7 +154,7 @@ public sealed class NimCompletionTranslatorTests
             Choices: [choice],
             Usage: new NimUsage(ReportedPromptTokens, ReportedCompletionTokens, ReportedTotalTokens));
 
-        var message = NimCompletionTranslator.Translate(completion, MessageId, EchoedModel, InputTokens, thinkingEnabled: true);
+        var message = NimCompletionTranslator.Translate(completion, MessageId, EchoedModel, InputTokens, thinkingEnabled: true, NullLogger.Instance);
 
         await Assert.That(message.Usage.InputTokens).IsEqualTo(ReportedPromptTokens);
         await Assert.That(message.Usage.OutputTokens).IsEqualTo(ReportedCompletionTokens);
@@ -164,9 +167,41 @@ public sealed class NimCompletionTranslatorTests
     {
         var completion = Completion(new(AssistantRole, NimContent.FromText(new('a', LongAnswerLength))));
 
-        var message = NimCompletionTranslator.Translate(completion, MessageId, EchoedModel, InputTokens, thinkingEnabled: true);
+        var message = NimCompletionTranslator.Translate(completion, MessageId, EchoedModel, InputTokens, thinkingEnabled: true, NullLogger.Instance);
 
         await Assert.That(message.Usage.OutputTokens).IsGreaterThan(0);
+    }
+
+    /// <summary>A call lifted out of answer text says so in the log.</summary>
+    /// <returns>A task that completes when the assertions have run.</returns>
+    /// <remarks>
+    /// The two ways a call reaches a client are indistinguishable once it gets there, and they
+    /// fail differently: one carries the model's own arguments, the other carries arguments this
+    /// proxy assembled from marker tokens. Without this line, a call that arrives with arguments
+    /// making no sense cannot be attributed to either from the log.
+    /// </remarks>
+    [Test]
+    public async Task RecoveredCallIsReported()
+    {
+        const string Answer = "<tool_call><function=search><parameter=query>rain</parameter></function></tool_call>";
+
+        var logger = new CapturingLogger<NimCompletionTranslatorTests>();
+        var completion = Completion(new(AssistantRole, NimContent.FromText(Answer)));
+
+        var message = NimCompletionTranslator.Translate(
+            completion,
+            MessageId,
+            EchoedModel,
+            InputTokens,
+            thinkingEnabled: true,
+            logger);
+
+        await Assert.That(message.Content.Exists(static block => block.Type == ToolUseType)).IsTrue();
+
+        var recovered = logger.Entries.FindAll(static entry =>
+            entry.Level >= LogLevel.Warning && entry.Message.Contains("Recovered a search call", StringComparison.Ordinal));
+
+        await Assert.That(recovered.Count).IsEqualTo(1);
     }
 
     /// <summary>Wraps one message as a single-choice completion.</summary>
