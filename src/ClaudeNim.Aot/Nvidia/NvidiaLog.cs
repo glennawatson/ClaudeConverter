@@ -149,11 +149,25 @@ internal static partial class NvidiaLog
     /// <summary>Records that the upstream ended a streamed turn with a failure.</summary>
     /// <param name="logger">The log to write to.</param>
     /// <param name="reason">The failure the upstream reported.</param>
+    /// <param name="upstreamCode">The status the upstream gave, or 0 when it gave none.</param>
+    /// <param name="upstreamType">The upstream's own classification, or "none" when it gave none.</param>
+    /// <param name="reportedType">The Anthropic error class the client was given.</param>
+    /// <remarks>
+    /// The reason alone does not say what the client was told, and the client acts on that rather
+    /// than on the prose — a turn reported as <c>overloaded_error</c> is retried where the same
+    /// text as <c>api_error</c> ends the work. Both ends of the translation are recorded so the
+    /// two can be told apart without reproducing the failure.
+    /// </remarks>
     [LoggerMessage(
         EventId = 1007,
         Level = LogLevel.Warning,
-        Message = "NIM ended a streamed turn with a failure: {Reason}")]
-    internal static partial void StreamFailed(ILogger logger, string reason);
+        Message = "NIM ended a streamed turn with a failure (upstream status {UpstreamCode}, type {UpstreamType}; reported to the client as {ReportedType}): {Reason}")]
+    internal static partial void StreamFailed(
+        ILogger logger,
+        string reason,
+        int upstreamCode,
+        string upstreamType,
+        string reportedType);
 
     /// <summary>Records how much a streamed turn produced, once it has ended.</summary>
     /// <param name="logger">The log to write to.</param>
@@ -203,6 +217,26 @@ internal static partial class NvidiaLog
         Level = LogLevel.Information,
         Message = "Sending a turn for {RequestedModel} to NIM as {NimModel} (streaming: {Streaming}).")]
     internal static partial void SendingTurn(ILogger logger, string requestedModel, string nimModel, bool streaming);
+
+    /// <summary>Records the status a turn's upstream call came back with.</summary>
+    /// <param name="logger">The log to write to.</param>
+    /// <param name="nimModel">The NIM model the turn was sent to.</param>
+    /// <param name="status">The status the upstream returned.</param>
+    /// <param name="elapsedMilliseconds">How long the call took to answer.</param>
+    /// <remarks>
+    /// <see cref="SendingTurn"/> records only that a turn went out. Several in a row with nothing
+    /// between them is what a log of retried, failed and succeeded turns all look like, so the
+    /// status each one came back with is recorded to pair with it.
+    /// </remarks>
+    [LoggerMessage(
+        EventId = 1019,
+        Level = LogLevel.Information,
+        Message = "NIM answered for {NimModel} with status {Status} after {ElapsedMilliseconds}ms.")]
+    internal static partial void TurnAnswered(
+        ILogger logger,
+        string nimModel,
+        int status,
+        long elapsedMilliseconds);
 
     /// <summary>Records that the upstream rejected a Messages API turn outright.</summary>
     /// <param name="logger">The log to write to.</param>

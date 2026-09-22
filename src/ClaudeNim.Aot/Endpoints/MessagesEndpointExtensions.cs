@@ -1,6 +1,7 @@
 // Copyright (c) 2026 Glenn Watson and Contributors. All rights reserved.
 // Glenn Watson and Contributors licenses this file to you under the MIT license.
 // See the LICENSE file in the project root for full license information.
+using System.Diagnostics;
 using System.Net.Http.Json;
 using System.Runtime.CompilerServices;
 using System.Text.Json;
@@ -100,6 +101,10 @@ public static class MessagesEndpointExtensions
         NvidiaLog.SendingTurn(services.Logger, request.Model, resolved.NimModel, request.IsStreaming);
         LogUpstreamRequestBody(services.Logger, upstreamRequest);
 
+        // Measured around the whole call, retries and downgrades included, so the elapsed time is
+        // what the client actually waited rather than what the last attempt took.
+        var started = Stopwatch.GetTimestamp();
+
         HttpResponseMessage response;
         try
         {
@@ -115,17 +120,42 @@ public static class MessagesEndpointExtensions
 
         using (response)
         {
-            if (!response.IsSuccessStatusCode)
-            {
-                return await UpstreamFailureAsync(response, services.Logger, cancellationToken).ConfigureAwait(false);
-            }
+            var elapsed = (long)Stopwatch.GetElapsedTime(started).TotalMilliseconds;
+            NvidiaLog.TurnAnswered(services.Logger, resolved.NimModel, (int)response.StatusCode, elapsed);
 
-            return request.IsStreaming
-                ? await StreamAsync(response, context, request, resolved, messageId, services, cancellationToken)
-                    .ConfigureAwait(false)
-                : await CompleteAsync(response, request, resolved, messageId, services, cancellationToken)
-                    .ConfigureAwait(false);
+            return await DispatchAsync(response, context, request, resolved, messageId, services, cancellationToken)
+                .ConfigureAwait(false);
         }
+    }
+
+    /// <summary>Hands a successful upstream response to the translator its shape calls for.</summary>
+    /// <param name="response">The upstream response.</param>
+    /// <param name="context">The HTTP context being answered.</param>
+    /// <param name="request">The caller's request.</param>
+    /// <param name="resolved">The routing outcome.</param>
+    /// <param name="messageId">The identifier to report for the message.</param>
+    /// <param name="services">The services the turn is served from.</param>
+    /// <param name="cancellationToken">Abandons the turn when the client disconnects.</param>
+    /// <returns>The result to return, or <see langword="null"/> once a streamed body has been written.</returns>
+    private static async Task<IResult?> DispatchAsync(
+        HttpResponseMessage response,
+        HttpContext context,
+        MessagesRequest request,
+        ResolvedModel resolved,
+        string messageId,
+        MessageServices services,
+        CancellationToken cancellationToken)
+    {
+        if (!response.IsSuccessStatusCode)
+        {
+            return await UpstreamFailureAsync(response, services.Logger, cancellationToken).ConfigureAwait(false);
+        }
+
+        return request.IsStreaming
+            ? await StreamAsync(response, context, request, resolved, messageId, services, cancellationToken)
+                .ConfigureAwait(false)
+            : await CompleteAsync(response, request, resolved, messageId, services, cancellationToken)
+                .ConfigureAwait(false);
     }
 
     /// <summary>Logs the exact request sent upstream, when debug logging is enabled.</summary>

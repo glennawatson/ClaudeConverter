@@ -177,7 +177,7 @@ public sealed class NimStreamTranslator(
             }
             else
             {
-                NvidiaLog.StreamFailed(logger, error.Message);
+                LogStreamFailure(new(error.Message));
             }
 
             await WriteErrorAsync(
@@ -222,13 +222,24 @@ public sealed class NimStreamTranslator(
         if (chunk.Error is { } failure)
         {
             await WriteErrorAsync(failure, cancellationToken).ConfigureAwait(false);
-            NvidiaLog.StreamFailed(logger, failure.Message ?? string.Empty);
+            LogStreamFailure(failure);
             return true;
         }
 
         await ConsumeChunkAsync(chunk, cancellationToken).ConfigureAwait(false);
         return false;
     }
+
+    /// <summary>Records a mid-stream failure alongside what the client was told about it.</summary>
+    /// <param name="failure">The failure the upstream reported.</param>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private void LogStreamFailure(NimStreamError failure) =>
+        NvidiaLog.StreamFailed(
+            logger,
+            failure.Message ?? string.Empty,
+            failure.Code ?? 0,
+            failure.Type ?? "none",
+            StreamErrorTypes.FromUpstream(failure));
 
     /// <summary>Writes the event that reports an upstream failure to the client.</summary>
     /// <param name="failure">The failure the upstream reported.</param>
@@ -237,7 +248,7 @@ public sealed class NimStreamTranslator(
     private ValueTask WriteErrorAsync(NimStreamError failure, CancellationToken cancellationToken)
     {
         var detail = ErrorResponse.Create(
-            StreamErrorTypes.FromUpstream(failure.Code),
+            StreamErrorTypes.FromUpstream(failure),
             failure.Message ?? "The upstream ended the response with an unspecified failure.");
 
         return writer.WriteAsync(
