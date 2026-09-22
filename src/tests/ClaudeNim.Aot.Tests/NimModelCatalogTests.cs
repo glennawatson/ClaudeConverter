@@ -131,6 +131,61 @@ public sealed class NimModelCatalogTests
         await Assert.That(found).IsNull();
     }
 
+    /// <summary>A refresh that cannot reach NVIDIA keeps serving the listing it already had.</summary>
+    /// <returns>A task that completes when the assertions have run.</returns>
+    /// <remarks>
+    /// The fallback listing is the built-in subset, which is smaller than a live one. Letting a
+    /// failed refresh replace a good listing with it would shrink a client's model picker every
+    /// time the upstream had a bad minute, and a model that was there a moment ago would stop
+    /// being selectable. Stale is not wrong; the next expiry tries again.
+    /// </remarks>
+    [Test]
+    public async Task FailedRefreshKeepsThePreviousListing()
+    {
+        var reachable = true;
+        var client = new FakeNimClient { OnListModels = () => reachable ? new([new(UpstreamModel)]) : null };
+        var time = new FakeTimeProvider();
+
+        using var catalog = new NimModelCatalog(
+            client,
+            new ModelCatalogOptions(CacheMinutes: 1),
+            new ModelRoutingOptions(),
+            NullLogger<NimModelCatalog>.Instance,
+            time);
+
+        var live = await catalog.GetModelsAsync(CancellationToken.None);
+
+        reachable = false;
+        time.Advance(CacheLifetimeElapsed);
+        var afterFailure = await catalog.GetModelsAsync(CancellationToken.None);
+
+        await Assert.That(afterFailure.Count).IsEqualTo(live.Count);
+        await Assert.That(afterFailure.Exists(static m => m.Id.Contains(UpstreamModel, StringComparison.Ordinal))).IsTrue();
+    }
+
+    /// <summary>An unreachable listing on the very first call still yields the built-in models.</summary>
+    /// <returns>A task that completes when the assertion has run.</returns>
+    /// <remarks>
+    /// There is nothing stale to keep on a cold start, so the built-in subset is the best listing
+    /// available and a picker with some models in it beats one with none.
+    /// </remarks>
+    [Test]
+    public async Task UnreachableListingOnAColdStartFallsBackToTheBuiltIns()
+    {
+        var client = new FakeNimClient { OnListModels = static () => null };
+
+        using var catalog = new NimModelCatalog(
+            client,
+            new ModelCatalogOptions(CacheMinutes: 1),
+            new ModelRoutingOptions(),
+            NullLogger<NimModelCatalog>.Instance,
+            new FakeTimeProvider());
+
+        var models = await catalog.GetModelsAsync(CancellationToken.None);
+
+        await Assert.That(models.Count).IsGreaterThan(0);
+    }
+
     /// <summary>Claude aliases are advertised when configured, routing through the tier mapping.</summary>
     /// <returns>A task that completes when the assertions have run.</returns>
     [Test]

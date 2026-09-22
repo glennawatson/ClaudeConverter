@@ -27,6 +27,21 @@ public sealed class TokenCountEndpointExtensionsTests
         await Assert.That(((JsonHttpResult<TokenCountResponse>)result).Value.InputTokens).IsGreaterThan(0);
     }
 
+    /// <summary>A body carrying no messages is answered rather than crashing.</summary>
+    /// <returns>A task that completes when the assertion has run.</returns>
+    /// <remarks>
+    /// This is a regression test for a live defect. The estimator refuses a null list outright,
+    /// and nothing guarded it, so the question "how large is an empty conversation" reached
+    /// Kestrel as an unhandled exception and came back a 500 instead of a number.
+    /// </remarks>
+    [Test]
+    public async Task RequestWithNoMessagesIsAnswered()
+    {
+        var result = TokenCountEndpointExtensions.CountTokens(new("claude-sonnet-5", null!));
+
+        await Assert.That(((JsonHttpResult<TokenCountResponse>)result).Value.InputTokens).IsGreaterThanOrEqualTo(0);
+    }
+
     /// <summary>A missing request body is rejected with a clean error rather than crashing.</summary>
     /// <returns>A task that completes when the assertion has run.</returns>
     [Test]

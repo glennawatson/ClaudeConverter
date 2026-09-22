@@ -48,8 +48,12 @@ public static class TokenCountEndpointExtensions
                 "The request body was missing or unreadable.");
         }
 
+        // A body carrying no messages at all is a well-formed question with the answer zero, and
+        // the estimator refuses a null list outright. Left unguarded that reaches Kestrel as an
+        // unhandled exception, so a client asking how large an empty conversation is takes a 500
+        // rather than a number.
         TokenCountResponse response = new(
-            TokenEstimator.Estimate(request.Messages, request.System, request.Tools));
+            TokenEstimator.Estimate(request.Messages ?? [], request.System, request.Tools));
 
         return TypedResults.Json(response, ProxyJsonContext.Default.TokenCountResponse);
     }

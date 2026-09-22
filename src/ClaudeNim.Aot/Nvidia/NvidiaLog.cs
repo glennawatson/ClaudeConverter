@@ -220,6 +220,20 @@ internal static partial class NvidiaLog
         Message = "NIM stream ended after {Chunks} readable chunks and {Skipped} skipped.")]
     internal static partial void StreamCompleted(ILogger logger, int chunks, int skipped);
 
+    /// <summary>Records that a refresh failed and the previous listing is being served instead.</summary>
+    /// <param name="logger">The log to write to.</param>
+    /// <param name="models">How many models the kept listing holds.</param>
+    /// <remarks>
+    /// Better than the alternative, which is replacing a good listing with the built-in subset and
+    /// shrinking a client's model picker every time the upstream has a bad minute. The listing is
+    /// stale rather than wrong, and the next expiry tries again.
+    /// </remarks>
+    [LoggerMessage(
+        EventId = 1025,
+        Level = LogLevel.Warning,
+        Message = "The NVIDIA NIM listing could not be refreshed; serving the previous {Models} models instead.")]
+    internal static partial void ServingStaleModelList(ILogger logger, int models);
+
     /// <summary>Records that the advertised listing is being built from the built-in profiles.</summary>
     /// <param name="logger">The log to write to.</param>
     /// <remarks>

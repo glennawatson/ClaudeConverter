@@ -102,9 +102,20 @@ public sealed class NimModelCatalog : INimModelCatalog, IDisposable
                 return _cached;
             }
 
-            var models = await BuildAsync(cancellationToken).ConfigureAwait(false);
-            _cached = models;
+            var (models, fromUpstream) = await BuildAsync(cancellationToken).ConfigureAwait(false);
             _cachedAt = _timeProvider.GetUtcNow();
+
+            // A refresh that could not reach NVIDIA produces the built-in subset, which is a worse
+            // listing than the one already held. Replacing a good listing with it would shrink a
+            // client's model picker every time the upstream had a bad minute, so the stale one is
+            // kept and the clock restarted; the next expiry tries again.
+            if (!fromUpstream && _cached is { Count: > 0 } stale)
+            {
+                NvidiaLog.ServingStaleModelList(_logger, stale.Count);
+                return stale;
+            }
+
+            _cached = models;
             return models;
         }
         finally
@@ -153,10 +164,10 @@ public sealed class NimModelCatalog : INimModelCatalog, IDisposable
 
     /// <summary>Builds the complete advertised model listing.</summary>
     /// <param name="cancellationToken">The token that cancels the operation.</param>
-    /// <returns>The advertised model listing.</returns>
-    private async ValueTask<List<ModelDescriptor>> BuildAsync(CancellationToken cancellationToken)
+    /// <returns>The advertised listing, and whether it came from NVIDIA rather than the built-ins.</returns>
+    private async ValueTask<(List<ModelDescriptor> Models, bool FromUpstream)> BuildAsync(CancellationToken cancellationToken)
     {
-        var upstream = await FetchIdentifiersAsync(cancellationToken).ConfigureAwait(false);
+        var (upstream, fromUpstream) = await FetchIdentifiersAsync(cancellationToken).ConfigureAwait(false);
         var models = new List<ModelDescriptor>(upstream.Count * VariantsPerModel);
 
         for (var i = 0; i < upstream.Count; i++)
@@ -169,13 +180,14 @@ public sealed class NimModelCatalog : INimModelCatalog, IDisposable
             AddClaudeAliases(models);
         }
 
-        return models;
+        return (models, fromUpstream);
     }
 
     /// <summary>Fetches the model identifiers and published dates from NVIDIA's catalogue.</summary>
     /// <param name="cancellationToken">The token that cancels the operation.</param>
-    /// <returns>The identifiers and publication dates of chat-capable models, with fallback to the built-in list.</returns>
-    private async ValueTask<List<NimCatalogEntry>> FetchIdentifiersAsync(CancellationToken cancellationToken)
+    /// <returns>The identifiers and dates of chat-capable models, and whether NVIDIA supplied them.</returns>
+    private async ValueTask<(List<NimCatalogEntry> Entries, bool FromUpstream)> FetchIdentifiersAsync(
+        CancellationToken cancellationToken)
     {
         var listing = await TryListAsync(cancellationToken).ConfigureAwait(false);
         var entries = new List<NimCatalogEntry>();
@@ -195,7 +207,7 @@ public sealed class NimModelCatalog : INimModelCatalog, IDisposable
 
         if (entries.Count > 0)
         {
-            return entries;
+            return (entries, true);
         }
 
         NvidiaLog.UsingBuiltInModelList(_logger);
@@ -204,7 +216,7 @@ public sealed class NimModelCatalog : INimModelCatalog, IDisposable
             entries.Add(new(profile.Id, PublishedFallback));
         }
 
-        return entries;
+        return (entries, false);
     }
 
     /// <summary>Fetches the upstream listing, tolerating an unreachable endpoint or timeout.</summary>
@@ -216,12 +228,12 @@ public sealed class NimModelCatalog : INimModelCatalog, IDisposable
         {
             return await _client.ListModelsAsync(cancellationToken).ConfigureAwait(false);
         }
-        catch (HttpRequestException error)
+        catch (Exception error) when (error is HttpRequestException or IOException)
         {
             NvidiaLog.ModelListingUnreachable(_logger, error);
             return null;
         }
-        catch (TaskCanceledException error) when (!cancellationToken.IsCancellationRequested)
+        catch (OperationCanceledException error) when (!cancellationToken.IsCancellationRequested)
         {
             NvidiaLog.ModelListingTimedOut(_logger, error);
             return null;
