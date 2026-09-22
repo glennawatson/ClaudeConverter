@@ -124,6 +124,32 @@ public sealed class MessagesEndpointExtensionsTests
         await Assert.That(typed.StatusCode).IsEqualTo(StatusCodes.Status500InternalServerError);
     }
 
+    /// <summary>An upstream credential failure is not reported as the caller's own.</summary>
+    /// <param name="upstreamStatus">The status NIM rejected the proxy's key with.</param>
+    /// <returns>A task that completes when the assertions have run.</returns>
+    /// <remarks>
+    /// This is a regression test for a live defect. The key NIM rejected is the gateway's, but the
+    /// status was forwarded verbatim, so a coding client read a 403 on its own key and stopped to
+    /// ask the user to log in again — over an operator's expired NVIDIA key that logging in cannot
+    /// touch.
+    /// </remarks>
+    [Test]
+    [Arguments(HttpStatusCode.Unauthorized)]
+    [Arguments(HttpStatusCode.Forbidden)]
+    public async Task UpstreamCredentialFailureIsReportedAsAGatewayFailure(HttpStatusCode upstreamStatus)
+    {
+        List<AnthropicMessage> messages = [new(AnthropicMessage.UserRole, MessageContent.FromText(OrdinaryUserText))];
+        var request = new MessagesRequest(ClaudeModel, messages, OrdinaryMaxTokens);
+        var client = new FakeNimClient { OnSendChat = _ => new(upstreamStatus) { Content = new StringContent("Authorization failed") } };
+
+        var result = await MessagesEndpointExtensions.SendMessageAsync(request, Context(), Services(client), CancellationToken.None);
+
+        var typed = (JsonHttpResult<ErrorResponse>)result!;
+        await Assert.That(typed.StatusCode).IsEqualTo(StatusCodes.Status502BadGateway);
+        await Assert.That(typed.Value!.Error.Type).IsEqualTo("api_error");
+        await Assert.That(typed.Value.Error.Message).Contains("proxy's own API key");
+    }
+
     /// <summary>A transport failure reaching the upstream at all becomes a clean Anthropic error.</summary>
     /// <returns>A task that completes when the assertion has run.</returns>
     /// <remarks>

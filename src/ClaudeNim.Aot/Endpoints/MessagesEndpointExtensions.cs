@@ -391,8 +391,9 @@ public static class MessagesEndpointExtensions
         ILogger logger,
         CancellationToken cancellationToken)
     {
-        var status = (int)response.StatusCode;
-        var fallback = $"The upstream returned status {status}.";
+        var upstreamStatus = (int)response.StatusCode;
+        var status = TranslateUpstreamStatus(upstreamStatus);
+        var fallback = $"The upstream returned status {upstreamStatus}.";
 
         string body;
         try
@@ -401,13 +402,40 @@ public static class MessagesEndpointExtensions
         }
         catch (Exception error) when (IsUpstreamTransportFailure(error) && !cancellationToken.IsCancellationRequested)
         {
-            NvidiaLog.TurnRejectedByUpstream(logger, status, fallback);
-            return AnthropicErrors.Result(status, fallback);
+            NvidiaLog.TurnRejectedByUpstream(logger, upstreamStatus, fallback);
+            return AnthropicErrors.Result(status, Describe(upstreamStatus, fallback));
         }
 
-        NvidiaLog.TurnRejectedByUpstream(logger, status, Truncated(body.Length > 0 ? body : fallback));
-        return AnthropicErrors.Result(status, body.Length > 0 ? body : fallback);
+        var detail = body.Length > 0 ? body : fallback;
+        NvidiaLog.TurnRejectedByUpstream(logger, upstreamStatus, Truncated(detail));
+        return AnthropicErrors.Result(status, Describe(upstreamStatus, detail));
     }
+
+    /// <summary>Maps an upstream status onto the one the caller should be given.</summary>
+    /// <param name="upstreamStatus">The status NIM returned.</param>
+    /// <returns>The status to return to the caller.</returns>
+    /// <remarks>
+    /// Every other status passes through, because it describes the caller's own turn. A credential
+    /// failure does not: the credential NIM rejected is the proxy's, and forwarding the status
+    /// verbatim tells the client that its key was refused. A coding client acts on that — it stops
+    /// and asks the user to log in again, over an operator's expired NVIDIA key that logging in
+    /// cannot touch. The failure is the gateway's, so it is reported as one.
+    /// </remarks>
+    private static int TranslateUpstreamStatus(int upstreamStatus) =>
+        upstreamStatus is StatusCodes.Status401Unauthorized or StatusCodes.Status403Forbidden
+            ? StatusCodes.Status502BadGateway
+            : upstreamStatus;
+
+    /// <summary>Says whose credential failed, for the statuses where that is the whole story.</summary>
+    /// <param name="upstreamStatus">The status NIM returned.</param>
+    /// <param name="detail">The upstream's own description.</param>
+    /// <returns>The message to report.</returns>
+    private static string Describe(int upstreamStatus, string detail) =>
+        upstreamStatus is StatusCodes.Status401Unauthorized or StatusCodes.Status403Forbidden
+            ? $"NVIDIA NIM rejected the proxy's own API key with status {upstreamStatus}. "
+                + "This is the gateway's credential, not the caller's, and re-authenticating will not "
+                + $"change it — the key the proxy was started with needs fixing. Upstream said: {detail}"
+            : detail;
 
     /// <summary>Truncates a body so a log line stays a line rather than a dump of the whole payload.</summary>
     /// <param name="body">The body to truncate.</param>
