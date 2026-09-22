@@ -157,7 +157,7 @@ public static class NimCompletionTranslator
 
         if (thinkingEnabled)
         {
-            blocks.Add(new(Type: ContentBlockTypes.Thinking, Thinking: segment.Text));
+            blocks.Add(new(ContentBlockTypes.Thinking) { Thinking = segment.Text });
         }
     }
 
