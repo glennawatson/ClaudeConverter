@@ -18,11 +18,30 @@ namespace ClaudeNim.Aot.Nvidia;
 /// </remarks>
 public static class NimModelCatalogDefaults
 {
-    /// <summary>The context window NVIDIA documents for the Nemotron 3 hybrid Mamba-Transformer models.</summary>
-    internal const int NemotronThreeContextWindow = 1_048_576;
+    /// <summary>The million-token context window NVIDIA documents for its long-context models.</summary>
+    /// <remarks>
+    /// Shared by the Nemotron 3 family, GLM 5.3, Kimi K3 and DeepSeek V4.1. Every one of them is
+    /// documented as "up to 1M tokens", which is this exactly.
+    /// </remarks>
+    internal const int MillionTokenContext = 1_048_576;
+
+    /// <summary>The quarter-million context window documented for the mid-sized models.</summary>
+    internal const int QuarterMillionContext = 262_144;
+
+    /// <summary>The 128K context window documented for the smaller models.</summary>
+    internal const int OneTwentyEightKContext = 131_072;
 
     /// <summary>The default maximum model length NVIDIA ships for the Nemotron 3 models.</summary>
     internal const int NemotronThreeMaxOutputTokens = 262_144;
+
+    /// <summary>The output length NVIDIA recommends for the Nano Omni reasoning model.</summary>
+    /// <remarks>
+    /// Its shipped default is far smaller, and NVIDIA states outright that "increasing the maximum
+    /// output length to 131072 tokens can give the model enough room to produce more detailed and
+    /// correct answers" — which for a reasoning model is the difference between an answer and a
+    /// trace that ran out of room.
+    /// </remarks>
+    internal const int NanoOmniMaxOutputTokens = 131_072;
 
     /// <summary>The model the proxy routes to when configuration names none.</summary>
     internal const string RecommendedModel = "nvidia/nemotron-3-super-120b-a12b";
@@ -36,7 +55,7 @@ public static class NimModelCatalogDefaults
             SupportsTools: true,
             SupportsVision: false,
             SupportsThinking: true,
-            NemotronThreeContextWindow,
+            MillionTokenContext,
             NemotronThreeMaxOutputTokens),
         new(
             "nvidia/nemotron-3-super-120b-a12b",
@@ -44,25 +63,39 @@ public static class NimModelCatalogDefaults
             SupportsTools: true,
             SupportsVision: false,
             SupportsThinking: true,
-            NemotronThreeContextWindow,
+            MillionTokenContext,
             NemotronThreeMaxOutputTokens),
-        new("nvidia/nemotron-3.5-lightning-30b-a3b", "Nemotron 3.5 Lightning 30B A3B", true, false, true),
+        new(
+            "nvidia/nemotron-3.5-lightning-30b-a3b",
+            "Nemotron 3.5 Lightning 30B A3B",
+            SupportsTools: true,
+            SupportsVision: false,
+            SupportsThinking: true,
+            MillionTokenContext),
         new(
             "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning",
             "Nemotron 3 Nano Omni 30B A3B Reasoning",
             SupportsTools: true,
             SupportsVision: true,
-            SupportsThinking: true),
-        new("z-ai/glm-5.3", "GLM 5.3", true, false, true),
-        new("z-ai/glm-5.3-flash", "GLM 5.3 Flash", true, true, true),
-        new("moonshotai/kimi-k3", "Kimi K3", true, true, true),
-        new("deepseek-ai/deepseek-v4.1-flash", "DeepSeek V4.1 Flash", true, false, true),
-        new("meta/muse-glimmer-30b", "Muse Glimmer 30B", true, true, true),
-        new("poolside/laguna-xs-2.1", "Laguna XS 2.1", true, false, true),
-        new("google/gemma-4-31b-it", "Gemma 4 31B IT", true, false, false),
-        new("openai/gpt-oss-20b", "GPT-OSS 20B", true, false, true),
-        new("mistralai/mistral-nemotron", "Mistral Nemotron", true, false, false),
-        new("meta/llama-3.2-11b-vision-instruct", "Llama 3.2 11B Vision Instruct", false, true, false),
+            SupportsThinking: true,
+            QuarterMillionContext,
+            NanoOmniMaxOutputTokens),
+        new("z-ai/glm-5.3", "GLM 5.3", true, false, true, MillionTokenContext),
+        new("z-ai/glm-5.3-flash", "GLM 5.3 Flash", true, true, true, MillionTokenContext),
+        new("moonshotai/kimi-k3", "Kimi K3", true, true, true, MillionTokenContext),
+        new("deepseek-ai/deepseek-v4.1-flash", "DeepSeek V4.1 Flash", true, false, true, MillionTokenContext),
+        new("meta/muse-glimmer-30b", "Muse Glimmer 30B", true, true, true, OneTwentyEightKContext),
+        new("poolside/laguna-xs-2.1", "Laguna XS 2.1", true, false, true, QuarterMillionContext),
+        new("google/gemma-4-31b-it", "Gemma 4 31B IT", true, false, false, QuarterMillionContext),
+        new("openai/gpt-oss-20b", "GPT-OSS 20B", true, false, true, 128_000),
+        new("mistralai/mistral-nemotron", "Mistral Nemotron", true, false, false, OneTwentyEightKContext),
+        new(
+            "meta/llama-3.2-11b-vision-instruct",
+            "Llama 3.2 11B Vision Instruct",
+            SupportsTools: false,
+            SupportsVision: true,
+            SupportsThinking: false,
+            OneTwentyEightKContext),
     ];
 
     // Substrings that identify a model serving something other than chat completions. Matched

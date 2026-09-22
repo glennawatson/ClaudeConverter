@@ -132,6 +132,31 @@ public sealed class NimRequestBuilderTests
         await Assert.That(built.MaxTokens).IsEqualTo(NimModelCatalogDefaults.NemotronThreeMaxOutputTokens);
     }
 
+    /// <summary>Every model the catalogue sizes carries the window NVIDIA documents for it.</summary>
+    /// <param name="id">The NIM model identifier.</param>
+    /// <param name="contextWindow">The context length NVIDIA states for it.</param>
+    /// <returns>A task that completes when the assertion has run.</returns>
+    /// <remarks>
+    /// The sizing is data, and a typo in it is silent: a client told a model holds 131072 tokens
+    /// when it holds 1048576 compacts its history eight times sooner than it needs to, and nothing
+    /// about that looks like a fault. These are the figures on each model's NVIDIA reference page.
+    /// </remarks>
+    [Test]
+    [Arguments("nvidia/nemotron-3-ultra-550b-a55b", 1_048_576)]
+    [Arguments("nvidia/nemotron-3-super-120b-a12b", 1_048_576)]
+    [Arguments("nvidia/nemotron-3.5-lightning-30b-a3b", 1_048_576)]
+    [Arguments("z-ai/glm-5.3", 1_048_576)]
+    [Arguments("moonshotai/kimi-k3", 1_048_576)]
+    [Arguments("deepseek-ai/deepseek-v4.1-flash", 1_048_576)]
+    [Arguments("nvidia/nemotron-3-nano-omni-30b-a3b-reasoning", 262_144)]
+    [Arguments("poolside/laguna-xs-2.1", 262_144)]
+    [Arguments("google/gemma-4-31b-it", 262_144)]
+    [Arguments("openai/gpt-oss-20b", 128_000)]
+    [Arguments("mistralai/mistral-nemotron", 131_072)]
+    [Arguments("meta/llama-3.2-11b-vision-instruct", 131_072)]
+    public async Task DocumentedContextWindowIsCarried(string id, int contextWindow) =>
+        await Assert.That(NimModelCatalogDefaults.FindProfile(id)?.MaxInputTokens).IsEqualTo(contextWindow);
+
     /// <summary>A model the catalogue does not size is bounded by the configured default.</summary>
     /// <returns>A task that completes when the assertion has run.</returns>
     [Test]
