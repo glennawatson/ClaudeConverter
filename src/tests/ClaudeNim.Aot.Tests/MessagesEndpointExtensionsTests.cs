@@ -123,6 +123,74 @@ public sealed class MessagesEndpointExtensionsTests
         await Assert.That(typed.StatusCode).IsEqualTo(StatusCodes.Status500InternalServerError);
     }
 
+    /// <summary>A transport failure reaching the upstream at all becomes a clean Anthropic error.</summary>
+    /// <returns>A task that completes when the assertion has run.</returns>
+    /// <remarks>
+    /// This is a regression test for a live defect: a dropped connection or the internal
+    /// header-wait timeout firing reached Kestrel as an unhandled exception, which a real client
+    /// saw as the connection dying rather than a turn it could act on.
+    /// </remarks>
+    [Test]
+    public async Task TransportFailureReachingTheUpstreamBecomesAnAnthropicError()
+    {
+        List<AnthropicMessage> messages = [new(AnthropicMessage.UserRole, MessageContent.FromText(OrdinaryUserText))];
+        var request = new MessagesRequest(ClaudeModel, messages, OrdinaryMaxTokens);
+        var client = new FakeNimClient { OnSendChat = static _ => throw new IOException("Simulated transport failure.") };
+
+        var result = await MessagesEndpointExtensions.SendMessageAsync(request, Context(), Services(client), CancellationToken.None);
+
+        var typed = (JsonHttpResult<ErrorResponse>)result!;
+        await Assert.That(typed.StatusCode).IsEqualTo(StatusCodes.Status503ServiceUnavailable);
+    }
+
+    /// <summary>A transport failure reading a non-streamed body becomes a clean Anthropic error.</summary>
+    /// <returns>A task that completes when the assertion has run.</returns>
+    [Test]
+    public async Task TransportFailureReadingTheNonStreamedBodyBecomesAnAnthropicError()
+    {
+        List<AnthropicMessage> messages = [new(AnthropicMessage.UserRole, MessageContent.FromText(OrdinaryUserText))];
+        var request = new MessagesRequest(ClaudeModel, messages, OrdinaryMaxTokens);
+        var client = new FakeNimClient { OnSendChat = static _ => new(HttpStatusCode.OK) { Content = new ThrowingHttpContent() } };
+
+        var result = await MessagesEndpointExtensions.SendMessageAsync(request, Context(), Services(client), CancellationToken.None);
+
+        var typed = (JsonHttpResult<ErrorResponse>)result!;
+        await Assert.That(typed.StatusCode).IsEqualTo(StatusCodes.Status503ServiceUnavailable);
+    }
+
+    /// <summary>A transport failure reading the body of a streamed turn writes a clean error event.</summary>
+    /// <returns>A task that completes when the assertions have run.</returns>
+    [Test]
+    public async Task TransportFailureReadingTheStreamedBodyWritesAnErrorEvent()
+    {
+        List<AnthropicMessage> messages = [new(AnthropicMessage.UserRole, MessageContent.FromText(OrdinaryUserText))];
+        var request = new MessagesRequest(ClaudeModel, messages, OrdinaryMaxTokens, Stream: true);
+        var client = new FakeNimClient { OnSendChat = static _ => new(HttpStatusCode.OK) { Content = new ThrowingHttpContent() } };
+        var context = Context();
+
+        var result = await MessagesEndpointExtensions.SendMessageAsync(request, context, Services(client), CancellationToken.None);
+
+        await Assert.That(result).IsNull();
+        var body = Encoding.UTF8.GetString(((MemoryStream)context.Response.Body).ToArray());
+        await Assert.That(body).Contains("event: error");
+        await Assert.That(body).Contains("overloaded_error");
+    }
+
+    /// <summary>A transport failure reading a failed upstream's error body still reports the real status.</summary>
+    /// <returns>A task that completes when the assertion has run.</returns>
+    [Test]
+    public async Task TransportFailureReadingAFailedUpstreamBodyFallsBackToTheStatus()
+    {
+        List<AnthropicMessage> messages = [new(AnthropicMessage.UserRole, MessageContent.FromText(OrdinaryUserText))];
+        var request = new MessagesRequest(ClaudeModel, messages, OrdinaryMaxTokens);
+        var client = new FakeNimClient { OnSendChat = static _ => new(HttpStatusCode.InternalServerError) { Content = new ThrowingHttpContent() } };
+
+        var result = await MessagesEndpointExtensions.SendMessageAsync(request, Context(), Services(client), CancellationToken.None);
+
+        var typed = (JsonHttpResult<ErrorResponse>)result!;
+        await Assert.That(typed.StatusCode).IsEqualTo(StatusCodes.Status500InternalServerError);
+    }
+
     /// <summary>A streamed turn forwards the upstream's server-sent events through the translator.</summary>
     /// <returns>A task that completes when the assertions have run.</returns>
     [Test]

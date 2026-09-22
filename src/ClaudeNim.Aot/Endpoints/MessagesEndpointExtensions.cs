@@ -2,9 +2,9 @@
 // Glenn Watson and Contributors licenses this file to you under the MIT license.
 // See the LICENSE file in the project root for full license information.
 using System.Net.Http.Json;
+using System.Runtime.CompilerServices;
 using ClaudeNim.Aot.Anthropic;
 using ClaudeNim.Aot.Anthropic.Streaming;
-using ClaudeNim.Aot.Configuration;
 using ClaudeNim.Aot.Nvidia;
 using ClaudeNim.Aot.Optimizations;
 using ClaudeNim.Aot.RateLimiting;
@@ -114,7 +114,7 @@ public static class MessagesEndpointExtensions
             return request.IsStreaming
                 ? await StreamAsync(response, context, request, resolved, messageId, services, cancellationToken)
                     .ConfigureAwait(false)
-                : await CompleteAsync(response, request, resolved, messageId, services.Timeouts, cancellationToken)
+                : await CompleteAsync(response, request, resolved, messageId, services, cancellationToken)
                     .ConfigureAwait(false);
         }
     }
@@ -250,26 +250,54 @@ public static class MessagesEndpointExtensions
         var idleTimeout = TimeSpan.FromSeconds(services.Timeouts.StreamIdleSeconds);
         var translator = new NimStreamTranslator(writer, resolved.ThinkingEnabled, idleTimeout, services.Logger);
 
-        await using var upstream = await response.Content
-            .ReadAsStreamAsync(cancellationToken)
-            .ConfigureAwait(false);
+        Stream upstream;
+        try
+        {
+            upstream = await response.Content.ReadAsStreamAsync(cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception error) when (IsUpstreamTransportFailure(error) && !cancellationToken.IsCancellationRequested)
+        {
+            // Headers for the 200 response are already flushed at this point, so there is no
+            // status code left to change; the client learns about this the same way it learns
+            // about any other mid-stream failure, through an error event on the stream itself.
+            NvidiaLog.LogUpstreamTransportFailure(services.Logger, error);
+            await WriteStreamStartFailureAsync(writer, cancellationToken).ConfigureAwait(false);
+            return null;
+        }
 
-        await translator.TranslateAsync(
-            upstream,
-            messageId,
-            request.Model,
-            TokenEstimator.Estimate(request.Messages, request.System, request.Tools),
-            cancellationToken).ConfigureAwait(false);
+        await using (upstream.ConfigureAwait(false))
+        {
+            await translator.TranslateAsync(
+                upstream,
+                messageId,
+                request.Model,
+                TokenEstimator.Estimate(request.Messages, request.System, request.Tools),
+                cancellationToken).ConfigureAwait(false);
+        }
 
         return null;
     }
+
+    /// <summary>Writes the error event for a transport failure reached before any chunk could be read.</summary>
+    /// <param name="writer">The writer the event is emitted through.</param>
+    /// <param name="cancellationToken">Abandons the write when the client disconnects.</param>
+    /// <returns>A task that completes once the event has been written.</returns>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static ValueTask WriteStreamStartFailureAsync(AnthropicSseWriter writer, CancellationToken cancellationToken) =>
+        writer.WriteAsync(
+            StreamEventNames.Error,
+            ErrorResponse.Create(
+                AnthropicErrors.TypeFor(StatusCodes.Status503ServiceUnavailable),
+                "The upstream connection failed or timed out before the stream began."),
+            ProxyJsonContext.Default.ErrorResponse,
+            cancellationToken);
 
     /// <summary>Translates a completed upstream turn.</summary>
     /// <param name="response">The upstream response.</param>
     /// <param name="request">The caller's request.</param>
     /// <param name="resolved">The routing outcome.</param>
     /// <param name="messageId">The identifier to report for the message.</param>
-    /// <param name="timeouts">The configured upstream timeouts.</param>
+    /// <param name="services">The services the turn is served from.</param>
     /// <param name="cancellationToken">Abandons the turn when the client disconnects.</param>
     /// <returns>The Anthropic message.</returns>
     private static async Task<IResult?> CompleteAsync(
@@ -277,17 +305,28 @@ public static class MessagesEndpointExtensions
         MessagesRequest request,
         ResolvedModel resolved,
         string messageId,
-        HttpTimeoutOptions timeouts,
+        MessageServices services,
         CancellationToken cancellationToken)
     {
         // The pooled client carries no timeout of its own, so the body read is bounded here.
         // Headers were already received; this covers only the wait for the rest of the body.
         using var bodyTimeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-        bodyTimeout.CancelAfter(TimeSpan.FromSeconds(timeouts.ReadSeconds));
+        bodyTimeout.CancelAfter(TimeSpan.FromSeconds(services.Timeouts.ReadSeconds));
 
-        var completion = await response.Content
-            .ReadFromJsonAsync(ProxyJsonContext.Default.NimChatCompletion, bodyTimeout.Token)
-            .ConfigureAwait(false);
+        NimChatCompletion? completion;
+        try
+        {
+            completion = await response.Content
+                .ReadFromJsonAsync(ProxyJsonContext.Default.NimChatCompletion, bodyTimeout.Token)
+                .ConfigureAwait(false);
+        }
+        catch (Exception error) when (IsUpstreamTransportFailure(error) && !cancellationToken.IsCancellationRequested)
+        {
+            NvidiaLog.LogUpstreamTransportFailure(services.Logger, error);
+            return AnthropicErrors.Result(
+                StatusCodes.Status503ServiceUnavailable,
+                "The upstream connection failed or timed out before the response body finished.");
+        }
 
         var message = NimCompletionTranslator.Translate(
             completion,
@@ -303,16 +342,29 @@ public static class MessagesEndpointExtensions
     /// <param name="response">The failed upstream response.</param>
     /// <param name="cancellationToken">Abandons the read when the client disconnects.</param>
     /// <returns>The error result.</returns>
+    /// <remarks>
+    /// The status code is already in hand once this runs; a transport failure reading the body
+    /// that describes it just means the description is lost, not that the status is. Falling back
+    /// to a generic message for that status keeps the report honest instead of crashing over it.
+    /// </remarks>
     private static async Task<IResult?> UpstreamFailureAsync(
         HttpResponseMessage response,
         CancellationToken cancellationToken)
     {
-        var body = await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
         var status = (int)response.StatusCode;
+        var fallback = $"The upstream returned status {status}.";
 
-        return AnthropicErrors.Result(
-            status,
-            body.Length > 0 ? body : $"The upstream returned status {status}.");
+        string body;
+        try
+        {
+            body = await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception error) when (IsUpstreamTransportFailure(error) && !cancellationToken.IsCancellationRequested)
+        {
+            return AnthropicErrors.Result(status, fallback);
+        }
+
+        return AnthropicErrors.Result(status, body.Length > 0 ? body : fallback);
     }
 
     /// <summary>Puts the response into streaming mode and returns the writer for it.</summary>

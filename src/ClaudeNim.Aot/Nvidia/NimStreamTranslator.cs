@@ -7,6 +7,7 @@ using System.Text.Json;
 using ClaudeNim.Aot.Anthropic;
 using ClaudeNim.Aot.Anthropic.Streaming;
 using ClaudeNim.Aot.Serialization;
+using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.Logging;
 
 namespace ClaudeNim.Aot.Nvidia;
@@ -112,17 +113,59 @@ public sealed class NimStreamTranslator(
         // before every line, so a long answer runs to completion while a dead connection does not.
         using var idle = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
 
-        string? line;
-        while ((line = await ReadLineOrTimeoutAsync(reader, idle).ConfigureAwait(false)) is not null)
+        if (await ReadToCompletionAsync(reader, idle, cancellationToken).ConfigureAwait(false))
         {
-            if (await ConsumeLineAsync(line, cancellationToken).ConfigureAwait(false))
-            {
-                return;
-            }
+            return;
         }
 
         await FlushAsync(inputTokens, cancellationToken).ConfigureAwait(false);
         NvidiaLog.StreamCompleted(logger, _chunksRead, _chunksSkipped);
+    }
+
+    /// <summary>Determines whether an exception represents a failed or timed-out upstream connection.</summary>
+    /// <param name="error">The exception the read raised.</param>
+    /// <returns><see langword="true"/> when the exception is a transport-level failure.</returns>
+    private static bool IsUpstreamTransportFailure(Exception error) =>
+        error is HttpRequestException or OperationCanceledException or IOException;
+
+    /// <summary>Reads and consumes every line of the upstream body, surfacing a transport failure as an error event.</summary>
+    /// <param name="reader">The reader positioned on the upstream body.</param>
+    /// <param name="idle">The linked source the idle timeout is applied through.</param>
+    /// <param name="cancellationToken">Abandons the translation when the client disconnects.</param>
+    /// <returns><see langword="true"/> when the turn already ended and no further writing should happen.</returns>
+    /// <remarks>
+    /// By the time this runs, headers for a 200 response have already reached the client: there is
+    /// no status code left to change. A dropped connection or an idle timeout here used to reach
+    /// Kestrel as an unhandled exception, which the client saw as the connection simply dying mid
+    /// answer rather than a turn that ended with a reason. The caller's own token firing is not this
+    /// kind of failure — that is the client disconnecting, and there is no one left to write to.
+    /// </remarks>
+    private async ValueTask<bool> ReadToCompletionAsync(
+        StreamReader reader,
+        CancellationTokenSource idle,
+        CancellationToken cancellationToken)
+    {
+        string? line;
+        try
+        {
+            while ((line = await ReadLineOrTimeoutAsync(reader, idle).ConfigureAwait(false)) is not null)
+            {
+                if (await ConsumeLineAsync(line, cancellationToken).ConfigureAwait(false))
+                {
+                    return true;
+                }
+            }
+        }
+        catch (Exception error) when (IsUpstreamTransportFailure(error) && !cancellationToken.IsCancellationRequested)
+        {
+            NvidiaLog.StreamFailed(logger, error.Message);
+            await WriteErrorAsync(
+                new("The upstream connection failed or timed out before the turn finished.", Code: StatusCodes.Status503ServiceUnavailable),
+                cancellationToken).ConfigureAwait(false);
+            return true;
+        }
+
+        return false;
     }
 
     /// <summary>Reads the next line, restarting the idle clock first.</summary>
