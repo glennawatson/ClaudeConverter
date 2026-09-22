@@ -82,7 +82,7 @@ public static class MessagesEndpointExtensions
                 .ConfigureAwait(false);
         }
 
-        var resolved = services.Router.Resolve(request.Model);
+        var resolved = WithoutReasoningForMachines(services.Router.Resolve(request.Model), request);
         var upstreamRequest = NimRequestBuilder.Build(
             request,
             resolved.NimModel,
@@ -346,6 +346,27 @@ public static class MessagesEndpointExtensions
 
         return null;
     }
+
+    /// <summary>Turns reasoning off for a turn whose answer is read by a machine.</summary>
+    /// <param name="resolved">The routing outcome.</param>
+    /// <param name="request">The caller's request.</param>
+    /// <returns>The routing outcome, with reasoning suppressed where it can only cost time.</returns>
+    /// <remarks>
+    /// <para>
+    /// A caller asking for a JSON schema wants the object, and nothing reads the reasoning that
+    /// precedes it. On a model that reasons inline that trace is generated before the first
+    /// character of the answer, over whatever prompt was sent — and these turns send a lot, because
+    /// the thing being judged is the conversation. A client's own evaluator gives up waiting long
+    /// before the model reaches the JSON it asked for, which reads as the assistant abandoning the
+    /// work rather than as a turn that was still coming.
+    /// </para>
+    /// <para>
+    /// Only the reasoning is dropped, not the request. What the caller asked for is still answered,
+    /// and answered in the shape it asked for.
+    /// </para>
+    /// </remarks>
+    private static ResolvedModel WithoutReasoningForMachines(ResolvedModel resolved, MessagesRequest request) =>
+        request.OutputConfig?.Format is null ? resolved : resolved with { ThinkingEnabled = false };
 
     /// <summary>Reads a non-streamed body, recording it before it is parsed.</summary>
     /// <param name="response">The upstream response.</param>

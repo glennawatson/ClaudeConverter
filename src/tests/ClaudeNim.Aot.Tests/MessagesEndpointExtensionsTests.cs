@@ -5,6 +5,7 @@ using System.Net;
 using System.Net.Http.Json;
 using System.Runtime.CompilerServices;
 using System.Text;
+using System.Text.Json;
 using ClaudeNim.Aot.Anthropic;
 using ClaudeNim.Aot.Configuration;
 using ClaudeNim.Aot.Endpoints;
@@ -30,6 +31,9 @@ public sealed class MessagesEndpointExtensionsTests
 
     /// <summary>The output ceiling used across ordinary (non-housekeeping) fixture requests.</summary>
     private const int OrdinaryMaxTokens = 1024;
+
+    /// <summary>The role the fake upstream authors its answers as.</summary>
+    private const string AssistantRole = "assistant";
 
     /// <summary>The user text shared by the real-turn fixtures.</summary>
     private const string OrdinaryUserText = "hello, how are you?";
@@ -99,7 +103,7 @@ public sealed class MessagesEndpointExtensionsTests
         List<AnthropicMessage> messages = [new(AnthropicMessage.UserRole, MessageContent.FromText(OrdinaryUserText))];
         var request = new MessagesRequest(ClaudeModel, messages, OrdinaryMaxTokens);
         var completion = new NimChatCompletion(
-            Choices: [new NimChoice(Message: new NimChatMessage("assistant", NimContent.FromText("I'm well.")))]);
+            Choices: [new NimChoice(Message: new NimChatMessage(AssistantRole, NimContent.FromText("I'm well.")))]);
         var client = new FakeNimClient { OnSendChat = _ => JsonResponse(HttpStatusCode.OK, completion) };
 
         var result = await MessagesEndpointExtensions.SendMessageAsync(request, Context(), Services(client), CancellationToken.None);
@@ -122,6 +126,39 @@ public sealed class MessagesEndpointExtensionsTests
 
         var typed = (JsonHttpResult<ErrorResponse>)result!;
         await Assert.That(typed.StatusCode).IsEqualTo(StatusCodes.Status500InternalServerError);
+    }
+
+    /// <summary>A structured-output turn asks for no reasoning trace.</summary>
+    /// <returns>A task that completes when the assertions have run.</returns>
+    /// <remarks>
+    /// Nothing reads the trace in front of a JSON object, and on a model that reasons inline it is
+    /// generated before the first character of the answer, over a prompt that carries the whole
+    /// conversation being judged. A client's evaluator times out waiting, which reads as the
+    /// assistant giving up rather than as a turn still coming.
+    /// </remarks>
+    [Test]
+    public async Task StructuredOutputTurnAsksForNoReasoning()
+    {
+        List<AnthropicMessage> messages = [new(AnthropicMessage.UserRole, MessageContent.FromText(OrdinaryUserText))];
+        var format = new OutputFormat(Schema: JsonElement.Parse("""{"type":"object"}"""));
+        var request = new MessagesRequest(
+            ClaudeModel,
+            messages,
+            OrdinaryMaxTokens,
+            OutputConfig: new OutputConfig(Format: format));
+
+        var completion = new NimChatCompletion(
+            Choices: [new NimChoice(Message: new NimChatMessage(AssistantRole, NimContent.FromText("{}")))]);
+
+        var client = new FakeNimClient { OnSendChat = _ => JsonResponse(HttpStatusCode.OK, completion) };
+
+        _ = await MessagesEndpointExtensions.SendMessageAsync(request, Context(), Services(client), CancellationToken.None);
+
+        await Assert.That(client.Requests.Count).IsEqualTo(1);
+
+        var sent = client.Requests[0];
+        await Assert.That(sent.ReasoningEffort).IsNull();
+        await Assert.That(sent.ResponseFormat).IsNotNull();
     }
 
     /// <summary>An upstream credential failure is not reported as the caller's own.</summary>
@@ -249,7 +286,7 @@ public sealed class MessagesEndpointExtensionsTests
         List<AnthropicMessage> messages = [new(AnthropicMessage.UserRole, MessageContent.FromText(OrdinaryUserText))];
         var request = new MessagesRequest(ClaudeModel, messages, OrdinaryMaxTokens);
         var completion = new NimChatCompletion(
-            Choices: [new NimChoice(Message: new NimChatMessage("assistant", NimContent.FromText("hi")))]);
+            Choices: [new NimChoice(Message: new NimChatMessage(AssistantRole, NimContent.FromText("hi")))]);
         var client = new FakeNimClient { OnSendChat = _ => JsonResponse(HttpStatusCode.OK, completion) };
         var logger = new CapturingLogger<MessageServices>();
 
