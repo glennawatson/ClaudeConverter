@@ -76,42 +76,49 @@ public static class MessagesEndpointExtensions
 
         var messageId = $"msg_{Guid.NewGuid():N}";
 
+        // Every line this turn writes is nested inside the scope, including the ones written
+        // deeper down by the client and the translator, which are never handed the identifier.
+        using var scope = NvidiaLog.BeginTurn(services.Logger, messageId, request.Model);
+
         if (RequestOptimizer.TryAnswer(request, services.Optimizations, out var canned))
         {
             return await AnswerLocallyAsync(request, context, messageId, canned, cancellationToken)
                 .ConfigureAwait(false);
         }
 
-        var resolved = WithoutReasoningForMachines(services.Router.Resolve(request.Model), request);
-        var upstreamRequest = NimRequestBuilder.Build(
-            request,
-            resolved.NimModel,
-            resolved.ThinkingEnabled,
-            services.Nim,
-            services.Catalog.DefaultMaxOutputTokens);
+        var turn = Route(request, messageId, services);
 
         using var lease = await services.Gate.AcquireAsync(cancellationToken).ConfigureAwait(false);
         if (!lease.IsAcquired)
         {
-            NvidiaLog.RateLimitSaturated(services.Logger, resolved.NimModel);
+            NvidiaLog.RateLimitSaturated(services.Logger, turn.Resolved.NimModel);
             return AnthropicErrors.Result(
                 StatusCodes.Status429TooManyRequests,
                 "The proxy's own rate limit is saturated; retry shortly.");
         }
 
-        NvidiaLog.SendingTurn(services.Logger, request.Model, resolved.NimModel, request.IsStreaming);
-        LogUpstreamRequestBody(services.Logger, resolved.NimModel, upstreamRequest);
+        NvidiaLog.SendingTurn(services.Logger, request.Model, turn.Resolved.NimModel, request.IsStreaming);
+        LogUpstreamRequestBody(services.Logger, turn.Resolved.NimModel, turn.UpstreamRequest);
 
         // Measured around the whole call, retries and downgrades included, so the elapsed time is
         // what the client actually waited rather than what the last attempt took.
         var started = Stopwatch.GetTimestamp();
 
-        var turn = new TurnContext(request, upstreamRequest, resolved, messageId);
-
         HttpResponseMessage response;
         try
         {
             (turn, response) = await SendWithFallbackAsync(turn, services, cancellationToken).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            // Nothing else records this. Every catch below steps aside for the client's own
+            // cancellation, so a turn abandoned while the upstream was still thinking left the
+            // log showing only that it was sent.
+            NvidiaLog.ClientAbandonedTurn(
+                services.Logger,
+                turn.Resolved.NimModel,
+                (long)Stopwatch.GetElapsedTime(started).TotalMilliseconds);
+            throw;
         }
         catch (Exception error) when (IsUpstreamTransportFailure(error) && !cancellationToken.IsCancellationRequested)
         {
@@ -128,6 +135,27 @@ public static class MessagesEndpointExtensions
 
             return await DispatchAsync(response, context, turn, services, cancellationToken).ConfigureAwait(false);
         }
+    }
+
+    /// <summary>Decides which model serves a turn, and builds the body it will be sent as.</summary>
+    /// <param name="request">The caller's request.</param>
+    /// <param name="messageId">The identifier to report for the message.</param>
+    /// <param name="services">The services the turn is served from.</param>
+    /// <returns>The turn, ready to send.</returns>
+    private static TurnContext Route(MessagesRequest request, string messageId, MessageServices services)
+    {
+        var resolved = WithoutReasoningForMachines(services.Router.Resolve(request.Model), request);
+
+        return new(
+            request,
+            NimRequestBuilder.Build(
+                request,
+                resolved.NimModel,
+                resolved.ThinkingEnabled,
+                services.Nim,
+                services.Catalog.DefaultMaxOutputTokens),
+            resolved,
+            messageId);
     }
 
     /// <summary>Sends a turn, walking the tier's fallback chain while the upstream is unavailable.</summary>
@@ -179,11 +207,16 @@ public static class MessagesEndpointExtensions
 
         var last = await TryOnceAsync(current, services, cancellationToken).ConfigureAwait(false);
 
+        if (last.Response is { } served)
+        {
+            return new(current, served);
+        }
+
         // Everything was busy. The model the turn was actually routed to is the one worth waiting
         // for, rather than whichever happened to be last in the chain.
-        return last.Response is { } served
-            ? new(current, served)
-            : new(turn, await services.Client.SendChatAsync(turn.UpstreamRequest, cancellationToken).ConfigureAwait(false));
+        NvidiaLog.EveryModelUnavailable(services.Logger, turn.Resolved.NimModel, alternatives.Count + 1);
+
+        return new(turn, await services.Client.SendChatAsync(turn.UpstreamRequest, cancellationToken).ConfigureAwait(false));
     }
 
     /// <summary>Makes one attempt at a turn, reporting an unavailable model as no answer at all.</summary>
@@ -452,6 +485,7 @@ public static class MessagesEndpointExtensions
         var active = turn;
         var current = response;
         var owned = false;
+        var started = Stopwatch.GetTimestamp();
 
         try
         {
@@ -463,6 +497,7 @@ public static class MessagesEndpointExtensions
 
                 if (outcome != StreamTurnOutcome.FailedBeforeOutput)
                 {
+                    ReportStreamEnded(services, active, outcome, started);
                     return null;
                 }
 
@@ -515,6 +550,36 @@ public static class MessagesEndpointExtensions
                 current.Dispose();
             }
         }
+    }
+
+    /// <summary>Records that a streamed turn reached its end, and how long it took to get there.</summary>
+    /// <param name="services">The services the turn was served from.</param>
+    /// <param name="turn">The turn that ended, naming the model that actually served it.</param>
+    /// <param name="outcome">How the turn ended.</param>
+    /// <param name="started">The timestamp translation began at.</param>
+    /// <remarks>
+    /// The status a streamed turn is reported with arrives in its first second; this is the only
+    /// line that says it ended, which is what tells a finished turn from one still running and
+    /// from one whose client hung up halfway. The level is checked first because both arguments
+    /// are computed, and a turn should not pay for a line nobody is reading.
+    /// </remarks>
+    private static void ReportStreamEnded(
+        MessageServices services,
+        TurnContext turn,
+        StreamTurnOutcome outcome,
+        long started)
+    {
+        if (!services.Logger.IsEnabled(LogLevel.Information))
+        {
+            return;
+        }
+
+        // Both are computed, so they are read into locals past the level check rather than
+        // evaluated as arguments to a line that may never be written.
+        var ended = outcome.ToString();
+        var elapsed = (long)Stopwatch.GetElapsedTime(started).TotalMilliseconds;
+
+        NvidiaLog.StreamedTurnEnded(services.Logger, turn.Resolved.NimModel, ended, elapsed);
     }
 
     /// <summary>Builds the translator one attempt at a streamed turn is served by.</summary>

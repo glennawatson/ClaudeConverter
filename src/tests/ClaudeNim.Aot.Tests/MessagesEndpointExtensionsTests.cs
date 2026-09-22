@@ -16,6 +16,7 @@ using ClaudeNim.Aot.Serialization;
 using ClaudeNim.Aot.Tests.Fakes;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Http.HttpResults;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 
 namespace ClaudeNim.Aot.Tests;
@@ -249,6 +250,33 @@ public sealed class MessagesEndpointExtensionsTests
         await Assert.That(client.Budgets[1]).IsEqualTo(1);
         await Assert.That(client.Budgets[2]).IsGreaterThan(1);
         await Assert.That(client.Requests[2].Model).IsEqualTo(UpstreamModel);
+    }
+
+    /// <summary>A spent chain says so, rather than leaving the log at the last model it tried.</summary>
+    /// <returns>A task that completes when the assertions have run.</returns>
+    /// <remarks>
+    /// Without this line the log ends on "trying X instead" and then shows retries against the
+    /// model the turn started at, which reads as though the fallback never happened at all.
+    /// </remarks>
+    [Test]
+    public async Task ExhaustedChainIsReportedBeforeWaitingOnTheRoutedModel()
+    {
+        var client = new FakeNimClient { OnSendChat = static _ => new HttpResponseMessage(HttpStatusCode.ServiceUnavailable) };
+        var logger = new CapturingLogger<MessageServices>();
+
+        List<AnthropicMessage> messages = [new(AnthropicMessage.UserRole, MessageContent.FromText(OrdinaryUserText))];
+        var request = new MessagesRequest(ClaudeModel, messages, OrdinaryMaxTokens);
+
+        _ = await MessagesEndpointExtensions.SendMessageAsync(
+            request,
+            Context(),
+            Services(client, FallbackModel, logger),
+            CancellationToken.None);
+
+        var spent = logger.Messages.Find(static m => m.Contains("were unavailable", StringComparison.Ordinal));
+
+        await Assert.That(spent).IsNotNull();
+        await Assert.That(spent!).Contains(UpstreamModel);
     }
 
     /// <summary>A rejected request is not walked down the chain to be rejected again.</summary>
@@ -512,9 +540,10 @@ public sealed class MessagesEndpointExtensionsTests
     /// <summary>Builds the services a turn is served from, with a fallback chain behind the routed model.</summary>
     /// <param name="client">The fake upstream client.</param>
     /// <param name="fallback">The model the routed one steps aside for.</param>
+    /// <param name="logger">The log the turn writes to.</param>
     /// <returns>The services.</returns>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private static MessageServices Services(FakeNimClient client, string fallback) =>
+    private static MessageServices Services(FakeNimClient client, string fallback, ILogger<MessageServices>? logger = null) =>
         new(
             new FakeModelRouter(new(ClaudeModel, UpstreamModel, ModelTier.Sonnet, true, [fallback])),
             client,
@@ -525,7 +554,7 @@ public sealed class MessagesEndpointExtensionsTests
             new OptimizationOptions(),
             new HttpTimeoutOptions(),
             TimeProvider.System,
-            NullLogger<MessageServices>.Instance);
+            logger ?? NullLogger<MessageServices>.Instance);
 
     /// <summary>Builds the services a turn is served from, wired to a fake upstream client and a capturing logger.</summary>
     /// <param name="client">The fake upstream client.</param>

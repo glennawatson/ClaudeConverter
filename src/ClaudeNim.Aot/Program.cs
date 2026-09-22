@@ -6,6 +6,7 @@ using ClaudeNim.Aot.Configuration;
 using ClaudeNim.Aot.Hosting;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 
 namespace ClaudeNim.Aot;
 
@@ -43,6 +44,12 @@ public static class Program
         // Environment variables win over the settings file: the proxy is usually run from a shell
         // or a container, where a credential in a file on disk is the thing you least want.
         _ = builder.Configuration.AddClaudeNimEnvironment();
+
+        // Scopes are on so every line of a turn names the turn it belongs to. The tracing
+        // identifiers the logger would otherwise prepend to each of those lines describe a
+        // distributed trace this proxy is not part of, and they are long: dropping them is what
+        // keeps the scope worth printing.
+        _ = builder.Logging.Configure(static options => options.ActivityTrackingOptions = ActivityTrackingOptions.None);
 
         _ = builder.Services.ConfigureHttpJsonOptions(ProxyServiceExtensions.ConfigureJsonSerialization);
 

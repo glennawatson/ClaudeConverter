@@ -163,12 +163,33 @@ budget there, which is what a deployment naming no chain keeps doing. A streamed
 before it produced anything re-issues down the chain too, so a saturated model gets one chance to
 start a stream rather than all of them.
 
+Order a chain by how fast its models answer, not by how good they are. A fallback is only worth
+having if it answers inside the client's patience, and the difference is not subtle: on a
+112,000-character Auto Mode classifier prompt, `nemotron-3-super` and `deepseek-v4.1-flash` both
+answer in about 3.5 seconds where `nemotron-3.5-lightning` takes 61 — it is a reasoning model, and
+it reasons over the whole prompt before saying anything. A chain that lands on it serves the turn
+correctly and still loses, because Claude Code gave up two minutes ago.
+
 What the chain does not cover is a rejected request: a `400` is a property of the body, not of the
 model's availability, and the next model would refuse it for the same reason. Nor does a model
 named by its gateway identifier get a chain — the client picked that model from the listing this
 proxy advertised, and answering as a different one is not a substitution it asked for. Every
 substitution is logged at warning naming both models, because the tier the client asked for is now
 being served by something else, usually weaker.
+
+### Following a turn through the log
+
+Several turns are served at once and their lines interleave, so every line a turn writes is nested
+in a logging scope naming it — `turn msg_a1b2… for claude-sonnet-5` — including the lines written by
+the transport and the stream translator, which are never handed the identifier. `IncludeScopes` is
+on in the shipped `appsettings.json`; without it the scope is still attached to the structured
+properties but the console formatter does not print it.
+
+Every turn ends on a line, which is what makes a stuck one visible: the answer and its status
+(1019), a streamed turn's end and duration (1030), the upstream giving up (1015), every model in the
+chain being unavailable (1028), or the client walking away before an answer arrived (1029). Each
+names the NIM model it happened to, so a model that is quietly failing shows up as a pattern rather
+than as noise spread across tiers.
 
 ## Endpoints
 

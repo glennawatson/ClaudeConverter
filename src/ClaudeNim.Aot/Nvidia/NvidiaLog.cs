@@ -15,6 +15,29 @@ namespace ClaudeNim.Aot.Nvidia;
 /// </remarks>
 internal static partial class NvidiaLog
 {
+    /// <summary>The scope every line written while serving one turn is nested inside.</summary>
+    /// <remarks>
+    /// Defined rather than composed per call, for the same reason the messages below are: the
+    /// delegate form does the formatting once and allocates nothing further per use.
+    /// </remarks>
+    private static readonly Func<ILogger, string, string, IDisposable?> TurnScope =
+        LoggerMessage.DefineScope<string, string>("turn {TurnId} for {RequestedModel}");
+
+    /// <summary>Opens the scope a turn's log lines are written inside.</summary>
+    /// <param name="logger">The log to write to.</param>
+    /// <param name="turnId">The identifier this turn is answered under.</param>
+    /// <param name="requestedModel">The Claude model name the client asked for.</param>
+    /// <returns>The scope, which ends when disposed.</returns>
+    /// <remarks>
+    /// Several turns are served at once and their lines interleave, so a failure cannot be paired
+    /// with the turn that caused it by proximity — under concurrency the nearest sending line is
+    /// often a different turn's. The scope reaches the lines written by the client and the
+    /// translator too, neither of which is handed the identifier.
+    /// </remarks>
+    [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.AggressiveInlining)]
+    internal static IDisposable? BeginTurn(ILogger logger, string turnId, string requestedModel) =>
+        TurnScope(logger, turnId, requestedModel);
+
     // Retries and downgrades are warnings, not information. Each one is the proxy silently doing
     // something other than what it was asked to, and a turn that only succeeds on the third
     // attempt with half its controls dropped is a degraded turn — indistinguishable, at
@@ -109,8 +132,40 @@ internal static partial class NvidiaLog
     [LoggerMessage(
         EventId = 1027,
         Level = LogLevel.Warning,
-        Message = "{Model} was unavailable (status {Status}); serving this turn with {Fallback} instead.")]
+        Message = "{Model} was unavailable (status {Status}); trying {Fallback} instead.")]
     internal static partial void FallingBackToAnotherModel(ILogger logger, string model, string fallback, int status);
+
+    /// <summary>Records that every model a tier could use was unavailable.</summary>
+    /// <param name="logger">The log to write to.</param>
+    /// <param name="model">The model the turn routed to, which it is about to wait on.</param>
+    /// <param name="tried">How many models were asked before giving up on finding a free one.</param>
+    /// <remarks>
+    /// Without this the log stops at the last <see cref="FallingBackToAnotherModel"/> line and then
+    /// shows retries against the model the turn started at, which reads as though the fallback
+    /// never happened. This is the line that says the chain was spent and patience is what is left.
+    /// </remarks>
+    [LoggerMessage(
+        EventId = 1028,
+        Level = LogLevel.Warning,
+        Message = "All {Tried} models for this turn were unavailable; waiting on {Model} with the full retry budget.")]
+    internal static partial void EveryModelUnavailable(ILogger logger, string model, int tried);
+
+    /// <summary>Records that the client stopped waiting before the upstream answered.</summary>
+    /// <param name="logger">The log to write to.</param>
+    /// <param name="model">The model the turn was waiting on.</param>
+    /// <param name="elapsedMilliseconds">How long the turn had been running when the client left.</param>
+    /// <remarks>
+    /// A turn that ends this way used to leave nothing in the log at all: no answer, no failure,
+    /// just the sending line and then silence, because the exception is the client's own
+    /// cancellation and every catch along the way deliberately steps aside for it. That silence
+    /// reads identically to a proxy that hung, so it is recorded — with how long the client
+    /// actually waited, which is the number that says whether the model was slow or stuck.
+    /// </remarks>
+    [LoggerMessage(
+        EventId = 1029,
+        Level = LogLevel.Warning,
+        Message = "The client gave up on its turn after {ElapsedMilliseconds}ms; {Model} had not answered.")]
+    internal static partial void ClientAbandonedTurn(ILogger logger, string model, long elapsedMilliseconds);
 
     /// <summary>Records that a streamed turn is being asked for again, having produced nothing.</summary>
     /// <param name="logger">The log to write to.</param>
@@ -351,6 +406,27 @@ internal static partial class NvidiaLog
         ILogger logger,
         string nimModel,
         int status,
+        long elapsedMilliseconds);
+
+    /// <summary>Records that a streamed turn ran to its end.</summary>
+    /// <param name="logger">The log to write to.</param>
+    /// <param name="model">The NIM model that served the turn.</param>
+    /// <param name="outcome">How the turn ended.</param>
+    /// <param name="elapsedMilliseconds">How long the whole turn took, first byte to last.</param>
+    /// <remarks>
+    /// <see cref="TurnAnswered"/> reports the headers arriving, which on a streamed turn is the
+    /// first second of a call that may run for minutes. Without this line the log has no record of
+    /// a streamed turn ending at all: a turn that finished and one that is still going look the
+    /// same, and so does one whose client hung up halfway.
+    /// </remarks>
+    [LoggerMessage(
+        EventId = 1030,
+        Level = LogLevel.Information,
+        Message = "The streamed turn on {Model} ended as {Outcome} after {ElapsedMilliseconds}ms.")]
+    internal static partial void StreamedTurnEnded(
+        ILogger logger,
+        string model,
+        string outcome,
         long elapsedMilliseconds);
 
     /// <summary>Records that the upstream rejected a Messages API turn outright.</summary>
