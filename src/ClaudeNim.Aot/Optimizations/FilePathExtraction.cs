@@ -100,7 +100,7 @@ public static class FilePathExtraction
     /// <returns>The operands.</returns>
     private static List<string> Operands(List<string> parts)
     {
-        var paths = new List<string>();
+        var paths = new List<string>(parts.Count - 1);
         var skip = false;
 
         for (var i = 1; i < parts.Count; i++)
@@ -134,7 +134,7 @@ public static class FilePathExtraction
     /// </remarks>
     private static List<string> GrepPaths(List<string> parts)
     {
-        var positional = new List<string>();
+        var positional = new List<string>(parts.Count - 1);
         var patternFromOption = false;
         var skip = false;
 

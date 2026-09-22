@@ -16,6 +16,6 @@
     <Project Path="tests/ClaudeNim.Aot.Tests/ClaudeNim.Aot.Tests.csproj" />
   </Folder>
   <Folder Name="/benchmarks/">
-    <!-- Benchmarks will be added here later -->
+    <Project Path="benchmarks/ClaudeNim.Aot.Benchmarks/ClaudeNim.Aot.Benchmarks.csproj" />
   </Folder>
 </Solution>

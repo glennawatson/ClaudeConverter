@@ -1,0 +1,86 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": [
+    "config:best-practices",
+    ":separateMajorReleases",
+    ":combinePatchMinorReleases",
+    "group:dotnetMonorepo",
+    "group:nugetMonorepo",
+    "security:openssf-scorecard"
+  ],
+  "mode": "full",
+  "timezone": "Australia/Melbourne",
+  "prConcurrentLimit": 10,
+  "prHourlyLimit": 10,
+  "labels": ["dependencies"],
+  "recreateWhen": "auto",
+  "semanticCommits": "enabled",
+  "semanticCommitType": "build",
+  "semanticCommitScope": "deps",
+  "commitMessageAction": "bump",
+  "osvVulnerabilityAlerts": true,
+  "vulnerabilityAlerts": {
+    "schedule": ["at any time"],
+    "labels": ["dependencies", "security"]
+  },
+  "packageRules": [
+    {
+      "description": "Refit and its HttpClientFactory integration must stay on the same version; a mismatch is a runtime failure, not a diagnostic.",
+      "matchManagers": ["nuget"],
+      "matchPackageNames": ["/^Refit(\\.|$)/"],
+      "groupName": "Refit"
+    },
+    {
+      "description": "TUnit and the testing-platform extensions move together; a mismatch breaks the run rather than a test.",
+      "matchManagers": ["nuget"],
+      "matchPackageNames": ["/^TUnit(\\.|$)/", "/^Microsoft\\.Testing\\./"],
+      "groupName": "test runner"
+    },
+    {
+      "description": "StyleSharp, PerformanceSharp, SecuritySharp and PublicApiSharp run as build errors here (TreatWarningsAsErrors), so a bump that adds a diagnostic reddens the build. One PR each keeps that attributable.",
+      "matchManagers": ["nuget"],
+      "matchPackageNames": [
+        "/^StyleSharp\\.Analyzers$/",
+        "/^PerformanceSharp\\.Analyzers$/",
+        "/^SecuritySharp\\.Analyzers$/",
+        "/^PublicApiSharp\\.Analyzers$/"
+      ],
+      "groupName": null,
+      "labels": ["dependencies", "build-gate"]
+    },
+    {
+      "description": "MinVer decides the shipped version.",
+      "matchManagers": ["nuget"],
+      "matchPackageNames": ["/^MinVer$/"],
+      "matchUpdateTypes": ["major"],
+      "dependencyDashboardApproval": true
+    },
+    {
+      "description": "BenchmarkDotNet's reports and CLI flags can change shape between majors, and the benchmarks workflow parses its exported JSON/GitHub-flavoured reports.",
+      "matchManagers": ["nuget"],
+      "matchPackageNames": ["/^BenchmarkDotNet(\\.|$)/"],
+      "groupName": "BenchmarkDotNet",
+      "matchUpdateTypes": ["major"],
+      "dependencyDashboardApproval": true
+    },
+    {
+      "matchManagers": ["github-actions"],
+      "groupName": "GitHub Actions"
+    },
+    {
+      "description": "Pinning names the group it pins rather than the generic dependencies topic.",
+      "matchManagers": ["github-actions"],
+      "matchUpdateTypes": ["pin", "pinDigest"],
+      "group": {
+        "commitMessageTopic": "GitHub Actions digests"
+      }
+    },
+    {
+      "description": "Minor, patch and digest updates to actions from GitHub and Microsoft merge automatically.",
+      "matchManagers": ["github-actions"],
+      "matchPackageNames": ["/^actions\\//", "/^github\\//", "/^microsoft\\//"],
+      "matchUpdateTypes": ["minor", "patch", "digest", "pin", "pinDigest"],
+      "automerge": true
+    }
+  ]
+}

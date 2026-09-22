@@ -20,6 +20,7 @@
 
   <ItemGroup>
     <InternalsVisibleTo Include="ClaudeNim.Aot.Tests" />
+    <InternalsVisibleTo Include="ClaudeNim.Aot.Benchmarks" />
   </ItemGroup>
 
 </Project>

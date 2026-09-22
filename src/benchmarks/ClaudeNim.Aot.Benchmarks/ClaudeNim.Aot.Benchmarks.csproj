@@ -1,0 +1,18 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <AssemblyName>ClaudeNim.Aot.Benchmarks</AssemblyName>
+    <RootNamespace>ClaudeNim.Aot.Benchmarks</RootNamespace>
+    <TargetFramework>net10.0</TargetFramework>
+    <OutputType>Exe</OutputType>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="BenchmarkDotNet" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\ClaudeNim.Aot\ClaudeNim.Aot.csproj" />
+  </ItemGroup>
+
+</Project>
