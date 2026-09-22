@@ -132,6 +132,55 @@ public sealed class NimRequestBuilderTests
         await Assert.That(built.MaxTokens).IsEqualTo(NimModelCatalogDefaults.NemotronThreeMaxOutputTokens);
     }
 
+    /// <summary>A failed tool call says so in the text, because the upstream shape has nowhere else to put it.</summary>
+    /// <returns>A task that completes when the assertions have run.</returns>
+    /// <remarks>
+    /// This is a regression test for a live defect. Anthropic reports failure with
+    /// <c>is_error</c>; the OpenAI shape has no such field, and the flag was simply dropped. A
+    /// blocked command whose output explains what to use instead then reached the model as
+    /// documentation rather than a refusal, and it reissued the same command four times running.
+    /// </remarks>
+    [Test]
+    public async Task FailedToolResultSaysSoInTheText()
+    {
+        List<ContentBlock> blocks =
+        [
+            new(ContentBlockTypes.ToolResult, ToolUseId: "toolu_1", Content: JsonElement.Parse("\"blocked: use the other tool\""), IsError: true),
+        ];
+
+        var request = new MessagesRequest(
+            ClaudeModel,
+            [new AnthropicMessage(AnthropicMessage.UserRole, MessageContent.FromBlocks(blocks))],
+            RequestedMaxTokens);
+
+        var built = NimRequestBuilder.Build(request, UpstreamModel, false, Options, CatalogDefault);
+
+        var tool = built.Messages.Find(static m => m.Role == "tool");
+        await Assert.That(tool).IsNotNull();
+        await Assert.That(tool!.Content?.Text).Contains("FAILED");
+        await Assert.That(tool.Content?.Text).Contains("blocked: use the other tool");
+    }
+
+    /// <summary>A tool call that succeeded carries its output unchanged.</summary>
+    /// <returns>A task that completes when the assertion has run.</returns>
+    [Test]
+    public async Task SucceededToolResultIsUnchanged()
+    {
+        List<ContentBlock> blocks =
+        [
+            new(ContentBlockTypes.ToolResult, ToolUseId: "toolu_1", Content: JsonElement.Parse("\"all good\"")),
+        ];
+
+        var request = new MessagesRequest(
+            ClaudeModel,
+            [new AnthropicMessage(AnthropicMessage.UserRole, MessageContent.FromBlocks(blocks))],
+            RequestedMaxTokens);
+
+        var built = NimRequestBuilder.Build(request, UpstreamModel, false, Options, CatalogDefault);
+
+        await Assert.That(built.Messages.Find(static m => m.Role == "tool")?.Content?.Text).IsEqualTo("all good");
+    }
+
     /// <summary>Every model the catalogue sizes carries the window NVIDIA documents for it.</summary>
     /// <param name="id">The NIM model identifier.</param>
     /// <param name="contextWindow">The context length NVIDIA states for it.</param>

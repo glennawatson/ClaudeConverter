@@ -12,6 +12,10 @@ namespace ClaudeNim.Aot.Nvidia;
 /// <summary>Translates an Anthropic Messages request into the NVIDIA NIM chat completions request that serves it.</summary>
 public static class NimRequestBuilder
 {
+    /// <summary>The sentence that carries a failed tool call into text the upstream shape can hold.</summary>
+    private const string FailedToolCallText =
+        "This tool call FAILED and produced no result. Do not repeat it unchanged.";
+
     /// <summary>Builds the upstream request.</summary>
     /// <param name="request">The caller's Anthropic request.</param>
     /// <param name="model">The NIM model the router selected.</param>
@@ -313,7 +317,7 @@ public static class NimRequestBuilder
                 FlushUserText(messages, text, images);
                 messages.Add(new(
                     NimChatMessage.ToolRole,
-                    NimContent.FromText(ContentText.FromToolResult(block.Content)),
+                    NimContent.FromText(ToolResultText(block)),
                     ToolCallId: block.ToolUseId));
                 continue;
             }
@@ -330,6 +334,36 @@ public static class NimRequestBuilder
         }
 
         FlushUserText(messages, text, images);
+    }
+
+    /// <summary>Renders a tool result, saying so in the text when the call failed.</summary>
+    /// <param name="block">The <c>tool_result</c> block.</param>
+    /// <returns>The text the upstream tool message carries.</returns>
+    /// <remarks>
+    /// <para>
+    /// Anthropic reports a failed tool call with <c>is_error</c> beside the output. The OpenAI
+    /// shape has no such field, so a proxy that forwards only the text tells the model the call
+    /// succeeded and returned this — whatever this is.
+    /// </para>
+    /// <para>
+    /// That is worse than losing a flag. A blocked command whose output explains what to use
+    /// instead reads, stripped of the flag, as helpful documentation rather than as a refusal, and
+    /// a model that thinks it was given advice tries the same command again. The failure has to
+    /// survive into the text, because the text is all that is left.
+    /// </para>
+    /// </remarks>
+    private static string ToolResultText(ContentBlock block)
+    {
+        var rendered = ContentText.FromToolResult(block.Content);
+
+        if (block.IsError != true)
+        {
+            return rendered;
+        }
+
+        return rendered.Length == 0
+            ? FailedToolCallText
+            : $"{FailedToolCallText} It reported:\n\n{rendered}";
     }
 
     /// <summary>Appends the readable text of one block to the turn being composed.</summary>
