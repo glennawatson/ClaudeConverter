@@ -17,7 +17,6 @@ namespace ClaudeNim.Aot.Nvidia;
 /// <param name="MediumEffort">
 /// Whether the model should spend fewer reasoning tokens, as Nemotron 3 Ultra spells it.
 /// </param>
-/// <param name="ReasoningBudget">A hard ceiling on reasoning tokens.</param>
 /// <param name="ForceNonemptyContent">
 /// Whether the model must return a non-empty answer. NVIDIA documents this as required when
 /// tools are combined with reasoning: without it a reasoning model can return a trace and no
@@ -33,8 +32,14 @@ namespace ClaudeNim.Aot.Nvidia;
 /// <para>
 /// The effort flag is spelled per model family — <c>low_effort</c> on Nemotron 3 Super,
 /// <c>medium_effort</c> on Nemotron 3 Ultra. Both are sent when the caller asks for reduced
-/// effort; a template that does not define one ignores it, so the pair is safe to send together
-/// and spares the proxy a per-model table that would go stale.
+/// effort, alongside the top-level <c>reasoning_effort</c> field that the current NIM models
+/// accept directly.
+/// </para>
+/// <para>
+/// Nothing that carries a number belongs here. An argument the template does not define is not
+/// ignored — it is passed into the template and can fail during generation, which on a streamed
+/// turn arrives as an error inside an otherwise successful response. Numeric controls go through
+/// <see cref="NimExtensions"/>, where an unsupported field is rejected before generation starts.
 /// </para>
 /// </remarks>
 [System.Diagnostics.DebuggerDisplay("NimChatTemplateKwargs: {ToString(),nq}")]
@@ -43,5 +48,4 @@ public sealed record NimChatTemplateKwargs(
     [property: JsonPropertyName("thinking")] bool? Thinking = null,
     [property: JsonPropertyName("low_effort")] bool? LowEffort = null,
     [property: JsonPropertyName("medium_effort")] bool? MediumEffort = null,
-    [property: JsonPropertyName("reasoning_budget")] int? ReasoningBudget = null,
     [property: JsonPropertyName("force_nonempty_content")] bool? ForceNonemptyContent = null);

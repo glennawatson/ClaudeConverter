@@ -27,6 +27,9 @@ namespace ClaudeNim.Aot.Nvidia;
 /// <param name="ToolChoice">How the model should pick a tool.</param>
 /// <param name="ParallelToolCalls">Whether the model may emit parallel tool calls.</param>
 /// <param name="ChatTemplateKwargs">Reasoning control passed to the model's chat template.</param>
+/// <param name="ReasoningEffort">How hard the model should reason; <c>low</c>, <c>medium</c> or <c>high</c>.</param>
+/// <param name="ResponseFormat">The shape the answer must take, for structured outputs.</param>
+/// <param name="Extensions">NVIDIA's own extensions to the request body.</param>
 [System.Diagnostics.DebuggerDisplay("NimChatRequest: {ToString(),nq}")]
 public sealed record NimChatRequest(
     [property: JsonPropertyName("model")] string Model,
@@ -48,4 +51,7 @@ public sealed record NimChatRequest(
     [property: JsonPropertyName("tools")] List<NimTool>? Tools = null,
     [property: JsonPropertyName("tool_choice")] JsonElement? ToolChoice = null,
     [property: JsonPropertyName("parallel_tool_calls")] bool? ParallelToolCalls = null,
-    [property: JsonPropertyName("chat_template_kwargs")] NimChatTemplateKwargs? ChatTemplateKwargs = null);
+    [property: JsonPropertyName("chat_template_kwargs")] NimChatTemplateKwargs? ChatTemplateKwargs = null,
+    [property: JsonPropertyName("reasoning_effort")] string? ReasoningEffort = null,
+    [property: JsonPropertyName("response_format")] JsonElement? ResponseFormat = null,
+    [property: JsonPropertyName("nvext")] NimExtensions? Extensions = null);

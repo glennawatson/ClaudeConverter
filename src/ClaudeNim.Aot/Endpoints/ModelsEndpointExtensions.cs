@@ -53,7 +53,11 @@ public static class ModelsEndpointExtensions
             var group = endpoints.MapGroup("/v1/models").WithTags("Models");
 
             _ = group.MapGet("/", ListModelsAsync).WithName(nameof(ListModelsAsync));
-            _ = group.MapGet("/{modelId}", GetModelAsync).WithName(nameof(GetModelAsync));
+
+            // A catch-all route parameter, not a single segment: an advertised identifier is
+            // "anthropic/nvidia_nim/<model>" and a route of "/{modelId}" can never match it, since
+            // routing splits on '/' before the handler ever sees the value.
+            _ = group.MapGet("/{*modelId}", GetModelAsync).WithName(nameof(GetModelAsync));
 
             return group;
         }

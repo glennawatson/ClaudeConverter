@@ -1,7 +1,6 @@
 // Copyright (c) 2026 Glenn Watson and Contributors. All rights reserved.
 // Glenn Watson and Contributors licenses this file to you under the MIT license.
 // See the LICENSE file in the project root for full license information.
-using System.Runtime.CompilerServices;
 using ClaudeNim.Aot.Anthropic;
 using ClaudeNim.Aot.Configuration;
 
@@ -10,35 +9,23 @@ namespace ClaudeNim.Aot.Optimizations;
 /// <summary>Answers Claude Code's housekeeping requests without calling the upstream.</summary>
 /// <remarks>
 /// <para>
-/// A coding session sends more than the turns the user typed. It also probes the credential,
-/// asks for a conversation title, asks for typeahead suggestions, and asks the model to pick
-/// apart a shell command or a tool result. Each of those has a known, content-free answer, and
-/// each otherwise costs a network round trip and a billed completion.
+/// A coding session sends more than the turns the user typed. It also probes the credential, asks
+/// for a conversation title, asks for typeahead suggestions, and asks which prefix a shell command
+/// should be permission-matched on or which files it read. The last two have mechanical answers,
+/// and the rest have content-free ones; each otherwise costs a round trip and a billed completion.
 /// </para>
 /// <para>
-/// Every fast path is individually switchable, and a request that is not recognised is simply
-/// forwarded — the failure mode of a missed match is an ordinary upstream call, not an error.
+/// Every fast path is individually switchable, and a request that is not recognised is forwarded —
+/// the failure mode of a missed match is an ordinary upstream call, not an error.
 /// </para>
 /// </remarks>
 public static class RequestOptimizer
 {
     /// <summary>The answer returned for a quota probe.</summary>
-    private const string QuotaAnswer = "ok";
+    private const string QuotaAnswer = "Quota check passed.";
 
     /// <summary>The answer returned when title generation is skipped.</summary>
     private const string TitleAnswer = "Conversation";
-
-    /// <summary>The answer returned when file path extraction is skipped.</summary>
-    /// <remarks>Claude Code reads this as "the tool result mentioned no files", which is inert.</remarks>
-    private const string FilePathAnswer = "<filepaths></filepaths>";
-
-    /// <summary>The answer returned when command prefix detection is skipped.</summary>
-    /// <remarks>
-    /// Claude Code matches this string against the user's permission rules. Returning a guessed
-    /// prefix could widen a match the user never granted, so the answer is deliberately one that
-    /// matches no rule: the command is then judged on its own, which errs towards asking.
-    /// </remarks>
-    private const string CommandPrefixAnswer = "none";
 
     /// <summary>Tries to answer a request locally.</summary>
     /// <param name="request">The incoming request.</param>
@@ -56,38 +43,49 @@ public static class RequestOptimizer
             return true;
         }
 
-        var prompt = Prompt(request);
-        answer = Match(prompt, options);
-        return answer.Length > 0 || IsSuppressed(prompt, options);
+        if (TryAnswerFromUserText(UserText(request), options, out answer))
+        {
+            return true;
+        }
+
+        if (options.SkipTitleGeneration && IsTitleRequest(ContentText.Extract(request.System)))
+        {
+            answer = TitleAnswer;
+            return true;
+        }
+
+        answer = string.Empty;
+        return false;
     }
 
-    /// <summary>Matches a prompt against the fast paths that produce an answer.</summary>
-    /// <param name="prompt">The lower-cased prompt text.</param>
+    /// <summary>Tries to answer from the markers a request carries in its user turns.</summary>
+    /// <param name="user">The flattened user text.</param>
     /// <param name="options">The switches for each fast path.</param>
-    /// <returns>The answer, or an empty string when nothing matched.</returns>
-    private static string Match(string prompt, OptimizationOptions options)
+    /// <param name="answer">The text to answer with, when one applies.</param>
+    /// <returns><see langword="true"/> when the request was recognised.</returns>
+    private static bool TryAnswerFromUserText(string user, OptimizationOptions options, out string answer)
     {
-        if (options.SkipTitleGeneration && Contains(prompt, OptimizationMarkers.TitleGeneration))
+        if (options.SkipSuggestionMode && user.Contains(OptimizationMarkers.SuggestionMode, StringComparison.Ordinal))
         {
-            return TitleAnswer;
+            answer = string.Empty;
+            return true;
         }
 
-        if (options.DetectCommandPrefix && Contains(prompt, OptimizationMarkers.CommandPrefix))
+        if (options.DetectCommandPrefix && IsPrefixRequest(user))
         {
-            return CommandPrefixAnswer;
+            answer = CommandPrefix.Extract(Section(user, OptimizationMarkers.CommandLabel));
+            return true;
         }
 
-        return options.MockFilePathExtraction && Contains(prompt, OptimizationMarkers.FilePathExtraction)
-            ? FilePathAnswer
-            : string.Empty;
+        if (options.MockFilePathExtraction && IsFilePathRequest(user))
+        {
+            answer = FilePathExtraction.Extract(Section(user, OptimizationMarkers.CommandLabel));
+            return true;
+        }
+
+        answer = string.Empty;
+        return false;
     }
-
-    /// <summary>Determines whether a prompt is one that is answered with nothing at all.</summary>
-    /// <param name="prompt">The lower-cased prompt text.</param>
-    /// <param name="options">The switches for each fast path.</param>
-    /// <returns><see langword="true"/> when the request should be answered with empty content.</returns>
-    private static bool IsSuppressed(string prompt, OptimizationOptions options) =>
-        options.SkipSuggestionMode && Contains(prompt, OptimizationMarkers.SuggestionMode);
 
     /// <summary>Determines whether a request is the probe that checks the credential's quota.</summary>
     /// <param name="request">The incoming request.</param>
@@ -107,28 +105,89 @@ public static class RequestOptimizer
         return string.Equals(text, OptimizationMarkers.QuotaProbe, StringComparison.OrdinalIgnoreCase);
     }
 
-    /// <summary>Flattens the parts of a request the markers are matched against.</summary>
-    /// <param name="request">The incoming request.</param>
-    /// <returns>The prompt text, lower-cased for matching.</returns>
-    /// <remarks>
-    /// Claude Code carries these instructions in the system prompt, but has moved individual ones
-    /// into the first user message across releases, so both are searched.
-    /// </remarks>
-    private static string Prompt(MessagesRequest request)
-    {
-        var system = ContentText.Extract(request.System);
-        var first = request.Messages.Count > 0
-            ? ContentText.Extract(request.Messages[0].Content)
-            : string.Empty;
+    /// <summary>Determines whether a prompt asks which prefix a command should be matched on.</summary>
+    /// <param name="user">The flattened user text.</param>
+    /// <returns><see langword="true"/> when the prompt is a prefix request.</returns>
+    private static bool IsPrefixRequest(string user) =>
+        user.Contains(OptimizationMarkers.PolicySpec, StringComparison.Ordinal)
+        && user.Contains(OptimizationMarkers.CommandLabel, StringComparison.Ordinal);
 
-        return $"{system}\n{first}".ToLowerInvariant();
+    /// <summary>Determines whether a prompt asks which files a command read.</summary>
+    /// <param name="user">The flattened user text.</param>
+    /// <returns><see langword="true"/> when the prompt is a file-path request.</returns>
+    /// <remarks>
+    /// All three markers are required. The prompt carries the command, its output, and the element
+    /// the answer goes in, and a run of text with only one of those is something else.
+    /// </remarks>
+    private static bool IsFilePathRequest(string user) =>
+        user.Contains(OptimizationMarkers.CommandLabel, StringComparison.Ordinal)
+        && user.Contains(OptimizationMarkers.OutputLabel, StringComparison.Ordinal)
+        && user.Contains(OptimizationMarkers.FilePaths, StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>Determines whether a system prompt asks for a conversation title.</summary>
+    /// <param name="system">The system prompt.</param>
+    /// <returns><see langword="true"/> when the prompt is a title request.</returns>
+    private static bool IsTitleRequest(string system) =>
+        system.Contains(OptimizationMarkers.Title, StringComparison.OrdinalIgnoreCase)
+        && OptimizationMarkers.IsTitleCorroborated(system);
+
+    /// <summary>Reads the run of text a labelled section introduces.</summary>
+    /// <param name="user">The flattened user text.</param>
+    /// <param name="label">The label the section starts at.</param>
+    /// <returns>The section's text, trimmed, or an empty string when the label is absent.</returns>
+    /// <remarks>
+    /// The section ends at whichever comes first: the next label, a blank line, or the start of an
+    /// element. The prompt lays the command out on its own, so anything past that boundary belongs
+    /// to a different part of the question.
+    /// </remarks>
+    private static string Section(string user, string label)
+    {
+        var start = user.IndexOf(label, StringComparison.Ordinal);
+        if (start < 0)
+        {
+            return string.Empty;
+        }
+
+        var body = user[(start + label.Length)..];
+        var end = body.Length;
+
+        foreach (var terminator in new[] { OptimizationMarkers.OutputLabel, "\n\n", "<" })
+        {
+            var cut = body.IndexOf(terminator, StringComparison.Ordinal);
+            if (cut >= 0 && cut < end)
+            {
+                end = cut;
+            }
+        }
+
+        return body[..end].Trim();
     }
 
-    /// <summary>Determines whether a prompt carries a marker.</summary>
-    /// <param name="prompt">The lower-cased prompt text.</param>
-    /// <param name="marker">The marker to look for, which is already lower-cased.</param>
-    /// <returns><see langword="true"/> when the marker is present.</returns>
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private static bool Contains(string prompt, string marker) =>
-        prompt.Contains(marker, StringComparison.Ordinal);
+    /// <summary>Flattens the user turns a marker may appear in.</summary>
+    /// <param name="request">The incoming request.</param>
+    /// <returns>The concatenated user text.</returns>
+    private static string UserText(MessagesRequest request)
+    {
+        var messages = request.Messages;
+        if (messages.Count == 0)
+        {
+            return string.Empty;
+        }
+
+        if (messages.Count == 1)
+        {
+            return ContentText.Extract(messages[0].Content);
+        }
+
+        var builder = new System.Text.StringBuilder();
+        for (var i = 0; i < messages.Count; i++)
+        {
+            if (string.Equals(messages[i].Role, AnthropicMessage.UserRole, StringComparison.Ordinal))
+            {
+                _ = builder.Append(ContentText.Extract(messages[i].Content)).Append('\n');
+            }
+        }
+
+        return builder.ToString();
+    }
 }

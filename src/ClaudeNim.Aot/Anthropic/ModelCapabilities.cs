@@ -45,9 +45,16 @@ public readonly record struct ModelCapabilities(
     /// <param name="thinking">Whether the model produces a reasoning trace.</param>
     /// <returns>The advertised capabilities.</returns>
     /// <remarks>
-    /// Batching, citations, code execution, PDF input, context management and structured outputs
-    /// are all reported as absent. Each is an Anthropic service feature rather than a model one,
-    /// and none of them exists on the NIM side of this proxy.
+    /// <para>
+    /// Batching, citations, code execution, PDF input and context management are reported as
+    /// absent. Each is an Anthropic service feature rather than a model one, and none of them
+    /// exists on the NIM side of this proxy.
+    /// </para>
+    /// <para>
+    /// Structured outputs are reported as available: NVIDIA NIM accepts an OpenAI-style
+    /// <c>response_format</c> carrying a JSON schema, which is the same guarantee the Anthropic
+    /// capability describes.
+    /// </para>
     /// </remarks>
     public static ModelCapabilities For(bool vision, bool thinking) =>
         new(
@@ -58,6 +65,6 @@ public readonly record struct ModelCapabilities(
             EffortCapability.For(thinking),
             CapabilitySupport.For(vision),
             CapabilitySupport.No,
-            CapabilitySupport.No,
+            CapabilitySupport.Yes,
             ThinkingCapability.For(thinking));
 }

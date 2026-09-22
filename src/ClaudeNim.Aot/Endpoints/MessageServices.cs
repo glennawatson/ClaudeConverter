@@ -15,10 +15,11 @@ namespace ClaudeNim.Aot.Endpoints;
 /// <param name="Gate">Bounds how fast requests reach the upstream.</param>
 /// <param name="Nim">The configured NIM defaults.</param>
 /// <param name="Optimizations">The switches for the local fast paths.</param>
+/// <param name="Timeouts">The configured upstream timeouts.</param>
 /// <param name="Logger">The diagnostic log.</param>
 /// <remarks>
-/// The handler takes this one parameter rather than five. A minimal API endpoint's signature is
-/// its dependency list, and five of them makes the shape of the turn harder to read than the code
+/// The handler takes this one parameter rather than six. A minimal API endpoint's signature is
+/// its dependency list, and six of them makes the shape of the turn harder to read than the code
 /// that serves it.
 /// </remarks>
 public sealed record MessageServices(
@@ -27,4 +28,5 @@ public sealed record MessageServices(
     IRequestGate Gate,
     NvidiaNimOptions Nim,
     OptimizationOptions Optimizations,
+    HttpTimeoutOptions Timeouts,
     ILogger<MessageServices> Logger);

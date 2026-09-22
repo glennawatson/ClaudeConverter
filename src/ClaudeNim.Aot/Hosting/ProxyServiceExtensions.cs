@@ -84,6 +84,9 @@ public static class ProxyServiceExtensions
             _ = services.AddSingleton(
                 configuration.GetSection(ProxyAuthenticationOptions.SectionName).Get<ProxyAuthenticationOptions>()
                 ?? new ProxyAuthenticationOptions());
+            _ = services.AddSingleton(
+                configuration.GetSection(RetryOptions.SectionName).Get<RetryOptions>()
+                ?? new RetryOptions());
 
             _ = services.AddSingleton(TimeProvider.System);
             _ = services.AddSingleton<IModelRouter, ModelRouter>();
@@ -107,7 +110,13 @@ public static class ProxyServiceExtensions
                 .ConfigureHttpClient(client =>
                 {
                     client.BaseAddress = new(BaseAddress(nim.BaseUrl));
-                    client.Timeout = TimeSpan.FromSeconds(timeouts.ReadSeconds);
+
+                    // HttpClient.Timeout would apply to the whole call, streamed body included,
+                    // and cut off a long answer partway through. The header phase is bounded
+                    // explicitly by NimClient instead; a streamed body is bounded by idle time in
+                    // NimStreamTranslator, and a non-streamed body by the same header timeout
+                    // applied again around the read.
+                    client.Timeout = Timeout.InfiniteTimeSpan;
                 })
                 .AddAuthorizationHeaderValueProvider(static (provider, _, _) =>
                     ValueTask.FromResult(provider.GetRequiredService<NvidiaNimOptions>().ApiKey))

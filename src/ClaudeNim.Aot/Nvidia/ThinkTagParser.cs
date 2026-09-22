@@ -31,11 +31,22 @@ public sealed record ThinkTagParser
     /// <summary>The closing <c>&lt;/think&gt;</c> tag.</summary>
     private const string CloseTag = "</think>";
 
+    /// <summary>How much answer text may precede an opening tag before it is taken literally.</summary>
+    /// <remarks>
+    /// Reasoning wrapped in tags comes first, before the answer. A tag appearing well into the
+    /// answer is the model writing about tags — asked to explain <c>&lt;think&gt;</c>, it would
+    /// otherwise have the rest of its reply eaten as a reasoning trace that never closes.
+    /// </remarks>
+    private const int LiteralTagThreshold = 200;
+
     /// <summary>The buffer holding partially parsed content between chunk boundaries.</summary>
     private readonly StringBuilder _buffer = new();
 
     /// <summary>Tracks whether the parser is currently inside a <c>&lt;think&gt;</c> block.</summary>
     private bool _insideThink;
+
+    /// <summary>The non-whitespace answer characters emitted so far.</summary>
+    private int _answerLength;
 
     /// <summary>Consumes a chunk of model output and appends any completed runs.</summary>
     /// <param name="chunk">The incoming content fragment.</param>
@@ -52,11 +63,31 @@ public sealed record ThinkTagParser
         while (_buffer.Length > 0)
         {
             var text = _buffer.ToString();
+
+            // Past the threshold an opening tag is ordinary prose, so nothing is searched for and
+            // the rest of the answer is released as it arrives.
+            if (!_insideThink && _answerLength >= LiteralTagThreshold)
+            {
+                Emit(segments, text);
+                _ = _buffer.Clear();
+                break;
+            }
+
             var tag = _insideThink ? CloseTag : OpenTag;
             var index = text.IndexOf(tag, StringComparison.Ordinal);
 
             if (index >= 0)
             {
+                // The prefix before this tag has not been counted yet, so an opening tag reached
+                // only by way of a long prefix in the same chunk must be checked here too, not
+                // just against the total left over from earlier chunks.
+                if (!_insideThink && _answerLength + CountVisible(text[..index]) >= LiteralTagThreshold)
+                {
+                    Emit(segments, text);
+                    _ = _buffer.Clear();
+                    break;
+                }
+
                 Emit(segments, text[..index]);
                 _ = _buffer.Remove(0, index + tag.Length);
                 _insideThink = !_insideThink;
@@ -112,14 +143,40 @@ public sealed record ThinkTagParser
         return earliest;
     }
 
+    /// <summary>Counts the characters of a run that are not whitespace.</summary>
+    /// <param name="text">The run to count.</param>
+    /// <returns>The number of non-whitespace characters.</returns>
+    private static int CountVisible(string text)
+    {
+        var visible = 0;
+        foreach (var c in text)
+        {
+            if (char.IsWhiteSpace(c))
+            {
+                continue;
+            }
+
+            visible++;
+        }
+
+        return visible;
+    }
+
     /// <summary>Appends a text segment to the list if non-empty.</summary>
     /// <param name="segments">The segments list to append to.</param>
     /// <param name="text">The text to add.</param>
     private void Emit(List<ThinkTagSegment> segments, string text)
     {
-        if (text.Length > 0)
+        if (text.Length == 0)
         {
-            segments.Add(new(_insideThink, text));
+            return;
         }
+
+        if (!_insideThink)
+        {
+            _answerLength += CountVisible(text);
+        }
+
+        segments.Add(new(_insideThink, text));
     }
 }

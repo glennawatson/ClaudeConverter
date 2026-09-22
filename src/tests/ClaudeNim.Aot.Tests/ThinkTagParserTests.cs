@@ -14,6 +14,12 @@ namespace ClaudeNim.Aot.Tests;
 /// </remarks>
 public sealed class ThinkTagParserTests
 {
+    /// <summary>The plain answer text used across several fixtures.</summary>
+    private const string Answer = "answer";
+
+    /// <summary>The length of the answer text used to push a tag past the literal-tag threshold.</summary>
+    private const int LeadLength = 250;
+
     /// <summary>Reasoning and answer are separated when both arrive in one chunk.</summary>
     /// <returns>A task that completes when the assertions have run.</returns>
     [Test]
@@ -30,10 +36,10 @@ public sealed class ThinkTagParserTests
     [Test]
     public async Task RecognisesATagSplitAcrossChunks()
     {
-        var segments = Run("<thi", "nk>reasoning</thi", "nk>answer");
+        var segments = Run("<thi", "nk>reasoning</thi", $"nk>{Answer}");
 
         await Assert.That(Join(segments, thinking: true)).IsEqualTo("reasoning");
-        await Assert.That(Join(segments, thinking: false)).IsEqualTo("answer");
+        await Assert.That(Join(segments, thinking: false)).IsEqualTo(Answer);
     }
 
     /// <summary>A partial tag is held back rather than leaking as answer text.</summary>
@@ -44,9 +50,9 @@ public sealed class ThinkTagParserTests
         var parser = new ThinkTagParser();
         var segments = new List<ThinkTagSegment>();
 
-        parser.Feed("answer<thi", segments);
+        parser.Feed($"{Answer}<thi", segments);
 
-        await Assert.That(Join(segments, thinking: false)).IsEqualTo("answer");
+        await Assert.That(Join(segments, thinking: false)).IsEqualTo(Answer);
     }
 
     /// <summary>Text with no tags passes through untouched.</summary>
@@ -78,6 +84,34 @@ public sealed class ThinkTagParserTests
         var segments = Run("a < b and c > d");
 
         await Assert.That(Join(segments, thinking: false)).IsEqualTo("a < b and c > d");
+    }
+
+    /// <summary>A tag appearing well into the answer is prose about tags, not reasoning.</summary>
+    /// <returns>A task that completes when the assertions have run.</returns>
+    /// <remarks>
+    /// Asked to explain how <c>&lt;think&gt;</c> tags work, the model's own answer would otherwise
+    /// be swallowed as an unterminated reasoning block the moment it names the tag.
+    /// </remarks>
+    [Test]
+    public async Task LateTagIsTakenLiterally()
+    {
+        var lead = new string('a', LeadLength);
+        var text = $"{lead} the tag is <think>literally this</think>";
+        var segments = Run(text);
+
+        await Assert.That(Join(segments, thinking: true)).IsEmpty();
+        await Assert.That(Join(segments, thinking: false)).IsEqualTo(text);
+    }
+
+    /// <summary>A tag near the very start of the answer is still treated as reasoning.</summary>
+    /// <returns>A task that completes when the assertions have run.</returns>
+    [Test]
+    public async Task EarlyTagIsStillReasoning()
+    {
+        var segments = Run($"<think>short</think>{Answer}");
+
+        await Assert.That(Join(segments, thinking: true)).IsEqualTo("short");
+        await Assert.That(Join(segments, thinking: false)).IsEqualTo(Answer);
     }
 
     /// <summary>Feeds a sequence of chunks and flushes.</summary>

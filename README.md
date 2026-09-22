@@ -4,34 +4,7 @@ An Anthropic Messages API in front of NVIDIA NIM, compiled ahead of time to a si
 binary. Point Claude Code at it and the session runs on NVIDIA's free models.
 
 It is a C# rewrite of the ideas in [cc-nim](https://github.com/diyism/cc-nim) and
-[claude-nim](https://github.com/claude-server/claude-nim), both MIT licensed — written to fix the
-things those proxies get wrong rather than to reproduce them.
-
-## What it fixes
-
-The headline problem with the existing proxies is that **model discovery does not work**, so a
-client's model picker shows nothing usable. Several separate defects add up to that, and each is
-fixed here:
-
-| Defect | What it causes | Fixed by |
-|---|---|---|
-| `/v1/models` entries in an invented shape | Clients cannot size a request, or ignore the entry | The documented shape: `max_input_tokens`, `max_tokens`, `created_at`, and the real nested `capabilities` object |
-| `has_more` hardcoded to `false` | Every model past the first page is stranded | A real cursor — `before_id`, `after_id`, `limit`, and `has_more`/`first_id`/`last_id` that describe the page actually returned |
-| No `GET /v1/models/{id}` | A client resuming with a stored model id cannot confirm it | Implemented, with a proper `not_found_error` |
-| `tool_choice` pinned to `"auto"` | Forced tool use is silently dropped | Full translation of `auto`/`any`/`none`/`tool` |
-| `<think>` reasoning discarded | GLM and DeepSeek reasoning is thrown away | Split out of `content` and re-emitted as `thinking` blocks |
-| `chat_template_kwargs` nested under `extra_body` | Reasoning control is silently ignored | Sent as the top-level member NIM actually reads |
-| No `stream_options.include_usage` | Token counts on streamed turns are guesswork | Requested up front, so real counts are reported |
-| Mid-stream failures swallowed | The client sees an empty turn, not an error | An `error` event carrying the upstream's own reason |
-
-Two of those were found by running this proxy against the live API, not by reading code:
-
-- NVIDIA's `reasoning_budget` chat-template argument is **rejected by Nemotron 3 Ultra's runner**.
-  Deriving it from `max_tokens` — which looks harmless — made every reasoning turn come back empty,
-  and on a streamed turn it failed *inside* a 200 response where no status-code retry could catch
-  it. It is now only forwarded when the caller explicitly asks for one.
-- A leading `/` on a Refit route is an absolute path under RFC 3986, which discards the `/v1` the
-  base address is rooted at. The routes are relative for that reason.
+[claude-nim](https://github.com/claude-server/claude-nim), both MIT licensed.
 
 ## Scope
 
@@ -83,23 +56,88 @@ export CLAUDENIM_ModelRouting__EnableThinking=false
 | `ModelRouting` | Which NIM model serves each Claude tier, and whether it reasons |
 | `ModelCatalog` | Listing cache lifetime and the sizes reported for unknown models |
 | `RateLimits` | Concurrency and sliding-window limits applied before the upstream |
-| `Timeouts` | Upstream connect and read timeouts |
+| `Timeouts` | Upstream connect, header-wait, body-read, and stream-idle timeouts |
+| `Retries` | Retry attempts and exponential-backoff delay for transient upstream failures |
 | `Optimizations` | The local fast paths for Claude Code's housekeeping requests |
 
-### Choosing a model
+### Model discovery
+
+`GET /v1/models` returns the documented shape — `max_input_tokens`, `max_tokens`, `created_at`,
+and a nested `capabilities` object covering effort levels, thinking, vision, and structured
+outputs — with real pagination (`before_id`, `after_id`, `limit`, and `has_more`/`first_id`/
+`last_id` describing the page actually returned). `GET /v1/models/{id}` resolves a single model,
+returning `not_found_error` when the credential cannot reach it.
 
 Every chat-capable model the credential can reach is advertised. Reasoning-capable models appear
 twice — once normally, once as `(no thinking)` — because a reasoning model with its trace off is a
-genuinely different choice for a coding session.
+genuinely different choice for a coding session. The Claude tier names (`claude-opus-5`,
+`claude-sonnet-5`, `claude-haiku-4-5`) are also advertised and route according to `ModelRouting`.
 
-The Claude tier names (`claude-opus-5`, `claude-sonnet-5`, `claude-haiku-4-5`) are also advertised
-and route according to `ModelRouting`.
+Capabilities are reported from what this proxy can actually deliver over NIM, not copied from
+Anthropic's own listing: `output_config.effort` maps to NIM's top-level `reasoning_effort`, with
+Claude's five levels folded onto NIM's three (`xhigh` and `max` both become `high`); an explicit
+`thinking.budget_tokens` goes through `nvext.max_thinking_tokens` where a model that lacks it is
+rejected up front rather than failing mid-generation; structured outputs are supported through
+`response_format` with a JSON schema; images are forwarded to a model the catalogue states has
+vision, and replaced with a placeholder for one that does not. Service-level Anthropic features
+with no NIM equivalent — batching, citations, code execution, server-side context management, PDF
+input — are reported as unsupported.
+
+### Local fast paths
+
+A coding session sends more than the turns you type. It probes the credential, asks for a
+conversation title and typeahead suggestions, and asks which prefix a shell command should be
+permission-matched on and which files it read. The last two have mechanical answers and are
+computed locally; the rest are content-free. The detection rules come from
+[cc-nim](https://github.com/diyism/cc-nim), which derived them from the prompts Claude Code
+actually sends, and they match on structural markers (`<policy_spec>`, `[SUGGESTION MODE:`,
+`<filepaths>`) rather than English prose.
+
+Command-prefix detection feeds a permission decision, so it errs toward asking: a command carrying
+a substitution reports `command_injection_detected` rather than a prefix taken from text that is
+not what will run. Turn any of these off individually if you would rather the model answered.
+
+### Tool calling
+
+Anthropic's `tool_choice` vocabulary (`auto`/`any`/`none`/named tool) is fully translated onto
+NIM's OpenAI-style equivalent, including forced tool use. A tool schema is sanitised of boolean
+subschemas NIM's validator rejects, and any parameter name that collides with NIM's own
+function-calling wrapper (`type` is the known case) is renamed on the way out and restored on the
+way back, invisibly to both ends.
+
+Models that render a tool call as marker tokens inside their answer text instead of filling in the
+structured field — several of the Kimi and DeepSeek families — are still supported: the markers are
+recovered and turned into ordinary `tool_use` blocks, streaming-safe across chunk boundaries.
+
+### Reasoning
+
+`<think>` tags some model families wrap reasoning in are split out of `content` and re-emitted as
+`thinking` blocks rather than reaching the client as literal text. A tag more than 200 characters
+into the answer is treated as prose about tags rather than reasoning, so asking a model to explain
+how `<think>` works does not eat the rest of its reply.
+
+Reasoning controls are retried away, not just declined: a model that rejects a reasoning field is
+retried once without it, and if a model rejects replayed `reasoning_content` on a later turn, that
+trace is stripped from history so the conversation keeps going rather than failing on every
+subsequent turn.
+
+### Reliability
+
+The pooled HTTP client carries no fixed timeout, because a single bound cannot fit both shapes of
+call: a streamed body is bounded by idle time (no bytes for `Timeouts:StreamIdleSeconds`), while
+the wait for a response's headers, and a non-streamed body once headers arrive, are each bounded by
+`Timeouts:ReadSeconds`. Transient upstream failures (`429`, `500`, `502`, `503`, `504`) are retried
+with hand-rolled exponential backoff and full jitter, honouring a `Retry-After` header when the
+upstream sends one. A rejected request (`400`/`500`) is instead retried with progressively less of
+it — reasoning controls first, then replayed reasoning — since a rejection means the upstream will
+never accept that exact body. A failure that arrives inside an already-successful streamed
+response is surfaced as an Anthropic `error` event rather than an empty turn.
 
 ## Endpoints
 
 | Route | Notes |
 |---|---|
-| `POST /v1/messages` | Streaming and non-streaming, tools, reasoning |
+| `POST /v1/messages` | Streaming and non-streaming, tools, reasoning, vision |
 | `POST /v1/messages/count_tokens` | Answered locally; NIM exposes no tokenizer |
 | `GET /v1/models` | Paginated with `before_id`, `after_id`, `limit` |
 | `GET /v1/models/{id}` | Single model, including its capabilities |
@@ -119,6 +157,8 @@ That is not free — it shapes the design:
 - The upstream transport is a Refit interface registered with `AddRefitGeneratedClient`, so the
   request-building code is generated at compile time and the JSON goes through the same context.
 - Logging goes through source-generated `LoggerMessage` delegates.
+- Retry backoff is hand-rolled rather than taken from a resilience library, so the whole policy is
+  one predicate and one delay calculation with no dependency the binary does not need.
 
 ## Development
 

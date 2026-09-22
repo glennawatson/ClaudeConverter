@@ -14,6 +14,7 @@ namespace ClaudeNim.Aot.Nvidia;
 /// <summary>Turns a streamed NVIDIA NIM completion into the Anthropic event stream.</summary>
 /// <param name="writer">The writer the Anthropic events are emitted through.</param>
 /// <param name="thinkingEnabled">Whether reasoning should be forwarded to the client.</param>
+/// <param name="idleTimeout">How long the upstream may produce nothing before the turn is abandoned.</param>
 /// <param name="logger">The diagnostic log.</param>
 /// <remarks>
 /// <para>
@@ -27,7 +28,11 @@ namespace ClaudeNim.Aot.Nvidia;
 /// </para>
 /// </remarks>
 [System.Diagnostics.DebuggerDisplay("NimStreamTranslator: {_thinkParser}")]
-public sealed class NimStreamTranslator(AnthropicSseWriter writer, bool thinkingEnabled, ILogger logger)
+public sealed class NimStreamTranslator(
+    AnthropicSseWriter writer,
+    bool thinkingEnabled,
+    TimeSpan idleTimeout,
+    ILogger logger)
 {
     /// <summary>The marker every server-sent event payload line begins with.</summary>
     private const string DataPrefix = "data:";
@@ -46,6 +51,12 @@ public sealed class NimStreamTranslator(AnthropicSseWriter writer, bool thinking
 
     /// <summary>The scratch list each parsed run of text is split into, reused across deltas.</summary>
     private readonly List<ThinkTagSegment> _segments = [];
+
+    /// <summary>The recovery pass for tool calls a model writes into its answer text.</summary>
+    private readonly EmbeddedToolCallParser _embeddedParser = new();
+
+    /// <summary>The scratch list the recovered runs are collected into, reused across deltas.</summary>
+    private readonly List<EmbeddedToolCall> _runs = [];
 
     /// <summary>The per-slot tool call state, keyed by the index the upstream assigns.</summary>
     private readonly Dictionary<int, ToolBlockState> _tools = [];
@@ -96,29 +107,58 @@ public sealed class NimStreamTranslator(AnthropicSseWriter writer, bool thinking
         await WriteMessageStartAsync(messageId, model, inputTokens, cancellationToken).ConfigureAwait(false);
 
         using var reader = new StreamReader(upstream);
-        while (await reader.ReadLineAsync(cancellationToken).ConfigureAwait(false) is { } line)
-        {
-            var chunk = ParseChunk(line);
-            if (chunk is null)
-            {
-                continue;
-            }
 
-            // A failure after the status code was committed arrives here rather than as a status.
-            // It ends the turn: continuing would emit an empty message the client reads as the
-            // model having nothing to say.
-            if (chunk.Error is { } failure)
+        // A streamed turn is bounded by silence rather than by duration: the clock is restarted
+        // before every line, so a long answer runs to completion while a dead connection does not.
+        using var idle = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+
+        string? line;
+        while ((line = await ReadLineOrTimeoutAsync(reader, idle).ConfigureAwait(false)) is not null)
+        {
+            if (await ConsumeLineAsync(line, cancellationToken).ConfigureAwait(false))
             {
-                await WriteErrorAsync(failure, cancellationToken).ConfigureAwait(false);
-                NvidiaLog.StreamFailed(logger, failure.Message ?? string.Empty);
                 return;
             }
-
-            await ConsumeChunkAsync(chunk, cancellationToken).ConfigureAwait(false);
         }
 
         await FlushAsync(inputTokens, cancellationToken).ConfigureAwait(false);
         NvidiaLog.StreamCompleted(logger, _chunksRead, _chunksSkipped);
+    }
+
+    /// <summary>Reads the next line, restarting the idle clock first.</summary>
+    /// <param name="reader">The reader positioned on the upstream body.</param>
+    /// <param name="idle">The linked source the idle timeout is applied through.</param>
+    /// <returns>The line, or <see langword="null"/> once the stream has ended.</returns>
+    private async ValueTask<string?> ReadLineOrTimeoutAsync(StreamReader reader, CancellationTokenSource idle)
+    {
+        idle.CancelAfter(idleTimeout);
+        return await reader.ReadLineAsync(idle.Token).ConfigureAwait(false);
+    }
+
+    /// <summary>Parses and applies one line of the upstream body.</summary>
+    /// <param name="line">The raw line read from the upstream body.</param>
+    /// <param name="cancellationToken">Abandons the translation when the client disconnects.</param>
+    /// <returns><see langword="true"/> when the line ended the turn and no further line should be read.</returns>
+    private async ValueTask<bool> ConsumeLineAsync(string line, CancellationToken cancellationToken)
+    {
+        var chunk = ParseChunk(line);
+        if (chunk is null)
+        {
+            return false;
+        }
+
+        // A failure after the status code was committed arrives here rather than as a status. It
+        // ends the turn: continuing would emit an empty message the client reads as the model
+        // having nothing to say.
+        if (chunk.Error is { } failure)
+        {
+            await WriteErrorAsync(failure, cancellationToken).ConfigureAwait(false);
+            NvidiaLog.StreamFailed(logger, failure.Message ?? string.Empty);
+            return true;
+        }
+
+        await ConsumeChunkAsync(chunk, cancellationToken).ConfigureAwait(false);
+        return false;
     }
 
     /// <summary>Writes the event that reports an upstream failure to the client.</summary>
@@ -290,11 +330,77 @@ public sealed class NimStreamTranslator(AnthropicSseWriter writer, bool thinking
             .ConfigureAwait(false);
     }
 
-    /// <summary>Appends a run of answer text, opening a text block when one is not already open.</summary>
+    /// <summary>Appends a run of answer text, recovering any tool call written into it.</summary>
+    /// <param name="text">The text the upstream produced.</param>
+    /// <param name="cancellationToken">Abandons the translation when the client disconnects.</param>
+    /// <returns>A task that completes once the run has been emitted.</returns>
+    /// <remarks>
+    /// Models that render a tool call as marker tokens inside their answer would otherwise stream
+    /// the markers to the client as literal text and never execute the tool.
+    /// </remarks>
+    private async ValueTask AppendTextAsync(string text, CancellationToken cancellationToken)
+    {
+        _runs.Clear();
+        _embeddedParser.Feed(text, _runs);
+        await EmitRunsAsync(cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>Emits the pending recovered runs, each onto the block its kind belongs to.</summary>
+    /// <param name="cancellationToken">Abandons the translation when the client disconnects.</param>
+    /// <returns>A task that completes once every run has been emitted.</returns>
+    private async ValueTask EmitRunsAsync(CancellationToken cancellationToken)
+    {
+        for (var i = 0; i < _runs.Count; i++)
+        {
+            var run = _runs[i];
+            if (run.IsCall)
+            {
+                await EmitRecoveredCallAsync(run, cancellationToken).ConfigureAwait(false);
+                continue;
+            }
+
+            await EmitPlainTextAsync(run.Payload, cancellationToken).ConfigureAwait(false);
+        }
+
+        _runs.Clear();
+    }
+
+    /// <summary>Emits a tool call that was recovered from the answer text.</summary>
+    /// <param name="run">The recovered call.</param>
+    /// <param name="cancellationToken">Abandons the translation when the client disconnects.</param>
+    /// <returns>A task that completes once the call has been emitted.</returns>
+    /// <remarks>
+    /// The call is already whole by the time it is recovered, so it is opened, filled and closed
+    /// in one go rather than streamed in fragments.
+    /// </remarks>
+    private async ValueTask EmitRecoveredCallAsync(EmbeddedToolCall run, CancellationToken cancellationToken)
+    {
+        await CloseTextAsync(cancellationToken).ConfigureAwait(false);
+        await CloseThinkingAsync(cancellationToken).ConfigureAwait(false);
+
+        var index = _nextBlockIndex++;
+        var identifier = $"toolu_{Guid.NewGuid():N}";
+
+        await WriteBlockStartAsync(
+            index,
+            new(ContentBlockTypes.ToolUse, Id: identifier, Name: run.Name, Input: JsonElements.EmptyObject),
+            cancellationToken).ConfigureAwait(false);
+
+        if (run.Payload.Length > 0)
+        {
+            _textLength += run.Payload.Length;
+            await WriteDeltaAsync(index, StreamDelta.ForToolArguments(run.Payload), cancellationToken)
+                .ConfigureAwait(false);
+        }
+
+        await WriteBlockStopAsync(index, cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>Appends a run of plain text, opening a text block when one is not already open.</summary>
     /// <param name="text">The text to emit.</param>
     /// <param name="cancellationToken">Abandons the translation when the client disconnects.</param>
     /// <returns>A task that completes once the text has been emitted.</returns>
-    private async ValueTask AppendTextAsync(string text, CancellationToken cancellationToken)
+    private async ValueTask EmitPlainTextAsync(string text, CancellationToken cancellationToken)
     {
         await OpenTextAsync(cancellationToken).ConfigureAwait(false);
         _textLength += text.Length;
@@ -495,6 +601,10 @@ public sealed class NimStreamTranslator(AnthropicSseWriter writer, bool thinking
         _segments.Clear();
         _thinkParser.Flush(_segments);
         await EmitSegmentsAsync(cancellationToken).ConfigureAwait(false);
+
+        _runs.Clear();
+        _embeddedParser.Flush(_runs);
+        await EmitRunsAsync(cancellationToken).ConfigureAwait(false);
 
         // A turn with no content at all is not a valid Anthropic message. Reasoning models that
         if (_nextBlockIndex == 0)

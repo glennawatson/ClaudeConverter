@@ -26,13 +26,14 @@ public static class NimRequestBuilder
         ArgumentNullException.ThrowIfNull(request);
         ArgumentNullException.ThrowIfNull(options);
 
-        var messages = BuildMessages(request, thinkingEnabled);
+        var messages = BuildMessages(request, thinkingEnabled, NimModelCatalogDefaults.SupportsVision(model));
         var tools = BuildTools(request.Tools);
         var maxTokens = ResolveMaxTokens(request.MaxTokens, options.MaxTokens);
 
         // Usage is only reported on a streamed turn when it is asked for up front. Without it
         // the output token count has to be guessed from response length.
         var streamOptions = request.IsStreaming ? new NimStreamOptions(true) : (NimStreamOptions?)null;
+        var effort = thinkingEnabled ? EffortLevels.ToReasoningEffort(request.OutputConfig?.Effort) : null;
         var toolChoice = tools is null
             ? (JsonElement?)null
             : ToolChoiceTranslator.Translate(request.ToolChoice) ?? ToolChoiceTranslator.Auto;
@@ -45,19 +46,21 @@ public static class NimRequestBuilder
             StreamOptions: streamOptions,
             Temperature: request.Temperature ?? NullIf(options.Temperature, 1.0),
             TopP: request.TopP ?? NullIf(options.TopP, 1.0),
-            TopK: request.TopK ?? (options.TopK >= 0 ? options.TopK : null),
+            TopK: request.TopK ?? TopKOrNull(options),
             MinP: NullIf(options.MinP, 0.0),
             RepetitionPenalty: NullIf(options.RepetitionPenalty, 1.0),
             PresencePenalty: NullIf(options.PresencePenalty, 0.0),
             FrequencyPenalty: NullIf(options.FrequencyPenalty, 0.0),
-            MinTokens: options.MinTokens > 0 ? options.MinTokens : null,
+            MinTokens: MinTokensOrNull(options),
             Seed: options.Seed,
             Stop: ResolveStop(request.StopSequences, options.Stop),
-            IgnoreEos: options.IgnoreEos ? true : null,
+            IgnoreEos: IgnoreEosOrNull(options),
             Tools: tools,
             ToolChoice: toolChoice,
             ParallelToolCalls: ResolveParallelToolCalls(request, options, tools is not null),
-            ChatTemplateKwargs: BuildTemplateArguments(request, thinkingEnabled, tools is not null));
+            ChatTemplateKwargs: BuildTemplateArguments(request, thinkingEnabled, tools is not null),
+            ReasoningEffort: effort,
+            Extensions: BuildExtensions(request, thinkingEnabled));
     }
 
     /// <summary>Resolves the maximum tokens by selecting the smaller of requested and configured ceiling.</summary>
@@ -73,6 +76,22 @@ public static class NimRequestBuilder
 
         return ceiling > 0 && requested > ceiling ? ceiling : requested;
     }
+
+    /// <summary>Reads the configured top-k cutoff, treating a negative value as unset.</summary>
+    /// <param name="options">The configured NIM defaults.</param>
+    /// <returns>The cutoff, or <see langword="null"/> when it is unset.</returns>
+    private static int? TopKOrNull(NvidiaNimOptions options) => options.TopK >= 0 ? options.TopK : null;
+
+    /// <summary>Reads the configured minimum length, treating zero as unset.</summary>
+    /// <param name="options">The configured NIM defaults.</param>
+    /// <returns>The minimum, or <see langword="null"/> when it is unset.</returns>
+    private static int? MinTokensOrNull(NvidiaNimOptions options) =>
+        options.MinTokens > 0 ? options.MinTokens : null;
+
+    /// <summary>Reads the configured end-of-sequence override, sending nothing when it is off.</summary>
+    /// <param name="options">The configured NIM defaults.</param>
+    /// <returns><see langword="true"/> when set, otherwise <see langword="null"/>.</returns>
+    private static bool? IgnoreEosOrNull(NvidiaNimOptions options) => options.IgnoreEos ? true : null;
 
     /// <summary>Returns the value unless it equals the neutral value within floating-point epsilon.</summary>
     /// <param name="value">The value to test.</param>
@@ -145,19 +164,32 @@ public static class NimRequestBuilder
         // NVIDIA documents force_nonempty_content as required when tools are combined with
         // reasoning: without it a reasoning model can return a trace and no answer, which a
         // coding client reads as an empty turn.
-        // The reasoning budget is only ever forwarded when the caller asked for one. Deriving it
-        // from max_tokens looks harmless and is not: Nemotron 3 Ultra's runner rejects the field
-        // outright ("thinking_token_budget is not yet supported"), and on a streamed turn it does
-        // so as an error inside a 200 response, which no status-code retry can catch. Sending it
-        // unasked turned every reasoning turn into an empty one.
+        // No reasoning budget is set here. The chat template is the wrong channel for it — an
+        // argument the template does not know is passed through and fails deep inside generation,
+        // which on a streamed turn surfaces as an error inside a 200 response that no status-code
+        // retry can catch. The budget goes through nvext instead, where an unsupported field is
+        // rejected up front.
         return new(
             EnableThinking: true,
             Thinking: true,
             LowEffort: reduced ? true : null,
             MediumEffort: moderate ? true : null,
-            ReasoningBudget: request.Thinking?.BudgetTokens,
             ForceNonemptyContent: hasTools ? true : null);
     }
+
+    /// <summary>Builds NVIDIA's own request extensions.</summary>
+    /// <param name="request">The caller's Anthropic request.</param>
+    /// <param name="thinkingEnabled">Whether reasoning was requested for this tier.</param>
+    /// <returns>The extensions, or <see langword="null"/> when there is nothing to send.</returns>
+    /// <remarks>
+    /// The budget is only forwarded when the caller explicitly asked for one. Deriving it from
+    /// <c>max_tokens</c> looks harmless and is not — it made every reasoning turn on models whose
+    /// runner lacks the field come back empty.
+    /// </remarks>
+    private static NimExtensions? BuildExtensions(MessagesRequest request, bool thinkingEnabled) =>
+        !thinkingEnabled || request.Thinking?.BudgetTokens is not { } budget || budget <= 0
+            ? null
+            : new NimExtensions(budget);
 
     /// <summary>Converts Anthropic tool definitions into NIM tools.</summary>
     /// <param name="tools">The caller's tool definitions.</param>
@@ -173,7 +205,8 @@ public static class NimRequestBuilder
         for (var i = 0; i < tools.Count; i++)
         {
             var tool = tools[i];
-            var schema = ToolSchemaSanitizer.Sanitize(ToolChoiceTranslator.SchemaOrEmpty(tool.InputSchema));
+            var declared = ToolChoiceTranslator.SchemaOrEmpty(tool.InputSchema);
+            var schema = ToolParameterAliases.Apply(ToolSchemaSanitizer.Sanitize(declared));
             result.Add(new(new NimFunctionDefinition(tool.Name, tool.Description ?? string.Empty, schema)));
         }
 
@@ -183,15 +216,16 @@ public static class NimRequestBuilder
     /// <summary>Builds the messages list for the upstream request.</summary>
     /// <param name="request">The caller's Anthropic request.</param>
     /// <param name="thinkingEnabled">Whether reasoning was requested for this tier.</param>
+    /// <param name="vision">Whether the target model accepts image input.</param>
     /// <returns>The upstream messages.</returns>
-    private static List<NimChatMessage> BuildMessages(MessagesRequest request, bool thinkingEnabled)
+    private static List<NimChatMessage> BuildMessages(MessagesRequest request, bool thinkingEnabled, bool vision)
     {
         var messages = new List<NimChatMessage>(request.Messages.Count + 1);
 
         var system = ContentText.Extract(request.System);
         if (system.Length > 0)
         {
-            messages.Add(new(NimChatMessage.SystemRole, system));
+            messages.Add(new(NimChatMessage.SystemRole, NimContent.FromText(system)));
         }
 
         for (var i = 0; i < request.Messages.Count; i++)
@@ -203,7 +237,7 @@ public static class NimRequestBuilder
             }
             else
             {
-                AppendUser(messages, message);
+                AppendUser(messages, message, vision);
             }
         }
 
@@ -213,12 +247,18 @@ public static class NimRequestBuilder
     /// <summary>Appends a user message to the upstream message list.</summary>
     /// <param name="messages">The upstream message list to append to.</param>
     /// <param name="message">The Anthropic user message.</param>
-    private static void AppendUser(List<NimChatMessage> messages, AnthropicMessage message)
+    /// <param name="vision">Whether the target model accepts image input.</param>
+    /// <remarks>
+    /// An image is forwarded when the model can see it and replaced with a placeholder when it
+    /// cannot. The listing reports the same distinction, so a client is never told a model accepts
+    /// images and then given a turn the picture was quietly dropped from.
+    /// </remarks>
+    private static void AppendUser(List<NimChatMessage> messages, AnthropicMessage message, bool vision)
     {
         var content = message.Content;
         if (content.Text is not null)
         {
-            messages.Add(new(NimChatMessage.UserRole, content.Text));
+            messages.Add(new(NimChatMessage.UserRole, NimContent.FromText(content.Text)));
             return;
         }
 
@@ -228,53 +268,111 @@ public static class NimRequestBuilder
         }
 
         var text = new StringBuilder();
+        var images = vision ? new List<string>() : null;
+
         for (var i = 0; i < blocks.Count; i++)
         {
             var block = blocks[i];
             if (string.Equals(block.Type, ContentBlockTypes.ToolResult, StringComparison.Ordinal))
             {
-                FlushUserText(messages, text);
+                FlushUserText(messages, text, images);
                 messages.Add(new(
                     NimChatMessage.ToolRole,
-                    ContentText.FromToolResult(block.Content),
+                    NimContent.FromText(ContentText.FromToolResult(block.Content)),
                     ToolCallId: block.ToolUseId));
                 continue;
             }
 
-            var blockText = block.Type switch
+            if (images is not null
+                && string.Equals(block.Type, ContentBlockTypes.Image, StringComparison.Ordinal)
+                && ImageUrl(block.Source) is { } url)
             {
-                ContentBlockTypes.Text => block.Text,
-                ContentBlockTypes.Image => "[Image]",
-                _ => null,
-            };
-
-            if (string.IsNullOrEmpty(blockText))
-            {
+                images.Add(url);
                 continue;
             }
 
-            if (text.Length > 0)
-            {
-                _ = text.Append('\n');
-            }
-
-            _ = text.Append(blockText);
+            AppendBlockText(text, block, vision);
         }
 
-        FlushUserText(messages, text);
+        FlushUserText(messages, text, images);
+    }
+
+    /// <summary>Appends the readable text of one block to the turn being composed.</summary>
+    /// <param name="text">The text accumulated for this turn.</param>
+    /// <param name="block">The block to append.</param>
+    /// <param name="vision">Whether the target model accepts image input.</param>
+    private static void AppendBlockText(StringBuilder text, ContentBlock block, bool vision)
+    {
+        var blockText = block.Type switch
+        {
+            ContentBlockTypes.Text => block.Text,
+            ContentBlockTypes.Image => vision ? null : "[Image]",
+            _ => null,
+        };
+
+        if (string.IsNullOrEmpty(blockText))
+        {
+            return;
+        }
+
+        if (text.Length > 0)
+        {
+            _ = text.Append('\n');
+        }
+
+        _ = text.Append(blockText);
+    }
+
+    /// <summary>Renders an Anthropic image source as the URL an OpenAI content part carries.</summary>
+    /// <param name="source">The image source, which may be absent.</param>
+    /// <returns>The URL, or <see langword="null"/> when the source cannot be rendered.</returns>
+    /// <remarks>
+    /// Anthropic sends base64 bytes with a separate media type; the OpenAI shape wants both folded
+    /// into one <c>data:</c> URL. A source of any other kind is passed through as given.
+    /// </remarks>
+    private static string? ImageUrl(ImageSource? source)
+    {
+        if (source is not { } image || string.IsNullOrEmpty(image.Data))
+        {
+            return null;
+        }
+
+        return string.IsNullOrEmpty(image.MediaType)
+            ? image.Data
+            : $"data:{image.MediaType};base64,{image.Data}";
     }
 
     /// <summary>Appends accumulated user text as a message if non-empty.</summary>
     /// <param name="messages">The upstream message list to append to.</param>
     /// <param name="text">The accumulated text to flush.</param>
-    private static void FlushUserText(List<NimChatMessage> messages, StringBuilder text)
+    /// <param name="images">The images gathered for this turn, or null when the model has no vision.</param>
+    private static void FlushUserText(List<NimChatMessage> messages, StringBuilder text, List<string>? images)
     {
+        if (images is { Count: > 0 })
+        {
+            var parts = new List<NimContentPart>(images.Count + 1);
+            if (text.Length > 0)
+            {
+                parts.Add(NimContentPart.ForText(text.ToString()));
+            }
+
+            for (var i = 0; i < images.Count; i++)
+            {
+                parts.Add(NimContentPart.ForImage(images[i]));
+            }
+
+            messages.Add(new(NimChatMessage.UserRole, NimContent.FromParts(parts)));
+            _ = text.Clear();
+            images.Clear();
+            return;
+        }
+
         if (text.Length == 0)
         {
             return;
         }
 
-        messages.Add(new(NimChatMessage.UserRole, text.ToString()));
+        messages.Add(new(NimChatMessage.UserRole, NimContent.FromText(text.ToString())));
         _ = text.Clear();
     }
 
@@ -329,7 +427,7 @@ public static class NimRequestBuilder
         var content = message.Content;
         if (content.Text is not null)
         {
-            messages.Add(new(NimChatMessage.AssistantRole, content.Text));
+            messages.Add(new(NimChatMessage.AssistantRole, NimContent.FromText(content.Text)));
             return;
         }
 
@@ -352,7 +450,7 @@ public static class NimRequestBuilder
 
         messages.Add(new(
             NimChatMessage.AssistantRole,
-            answer,
+            NimContent.FromText(answer),
             toolCalls,
             ReasoningContent: reasoning.Length > 0 ? reasoning.ToString() : null));
     }

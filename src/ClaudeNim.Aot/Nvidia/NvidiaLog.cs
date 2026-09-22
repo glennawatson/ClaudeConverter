@@ -24,6 +24,19 @@ internal static partial class NvidiaLog
         Message = "NIM rejected {Model} with the reasoning controls set; retrying without them.")]
     internal static partial void ChatTemplateRejected(ILogger logger, string model);
 
+    /// <summary>Records that a transient upstream failure is being waited out.</summary>
+    /// <param name="logger">The log to write to.</param>
+    /// <param name="status">The status the upstream returned.</param>
+    /// <param name="delayMilliseconds">How long the next attempt waits.</param>
+    [LoggerMessage(
+        EventId = 1008,
+        Level = LogLevel.Information,
+        Message = "NIM returned {Status}; retrying in {DelayMilliseconds}ms.")]
+    internal static partial void RetryingAfterTransientFailure(
+        ILogger logger,
+        int status,
+        double delayMilliseconds);
+
     /// <summary>Records that the upstream model listing returned a failure status.</summary>
     /// <param name="logger">The log to write to.</param>
     /// <param name="status">The HTTP status the listing returned.</param>

@@ -99,6 +99,16 @@ public static class NimModelCatalogDefaults
         return null;
     }
 
+    /// <summary>Decides whether a model accepts image input.</summary>
+    /// <param name="id">The NIM model identifier.</param>
+    /// <returns><see langword="true"/> when images may be forwarded to the model.</returns>
+    /// <remarks>
+    /// This is the same source the advertised listing sizes a model from, so what a client is told
+    /// about image support and what the request builder actually sends cannot drift apart. A model
+    /// the proxy has no stated knowledge of is treated as text-only, matching the listing.
+    /// </remarks>
+    public static bool SupportsVision(string id) => FindProfile(id)?.SupportsVision ?? false;
+
     /// <summary>Decides whether a model identifier names something that can answer a chat completion.</summary>
     /// <param name="id">The NIM model identifier.</param>
     /// <returns><see langword="true"/> when the model should be advertised.</returns>

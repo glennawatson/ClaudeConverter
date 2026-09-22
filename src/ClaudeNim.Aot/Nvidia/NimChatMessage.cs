@@ -7,14 +7,14 @@ namespace ClaudeNim.Aot.Nvidia;
 
 /// <summary>One message in a NIM chat completions transcript.</summary>
 /// <param name="Role">The author; <c>system</c>, <c>user</c>, <c>assistant</c> or <c>tool</c>.</param>
-/// <param name="Content">The message text.</param>
+/// <param name="Content">The message body, as text or as multimodal parts.</param>
 /// <param name="ToolCalls">Tool calls issued by an assistant message.</param>
 /// <param name="ToolCallId">The call a <c>tool</c> message answers.</param>
 /// <param name="ReasoningContent">Reasoning replayed on an assistant message.</param>
 [System.Diagnostics.DebuggerDisplay("NimChatMessage: {ToString(),nq}")]
 public sealed record NimChatMessage(
     [property: JsonPropertyName("role")] string Role,
-    [property: JsonPropertyName("content")] string? Content = null,
+    [property: JsonPropertyName("content")] NimContent? Content = null,
     [property: JsonPropertyName("tool_calls")] List<NimToolCall>? ToolCalls = null,
     [property: JsonPropertyName("tool_call_id")] string? ToolCallId = null,
     [property: JsonPropertyName("reasoning_content")] string? ReasoningContent = null)

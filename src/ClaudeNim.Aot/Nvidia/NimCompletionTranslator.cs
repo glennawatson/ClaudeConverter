@@ -61,7 +61,7 @@ public static class NimCompletionTranslator
         var blocks = new List<ContentBlock>();
 
         AppendReasoning(blocks, message?.ReasoningContent, thinkingEnabled);
-        AppendContent(blocks, message?.Content, thinkingEnabled);
+        AppendContent(blocks, message?.Content?.Text, thinkingEnabled);
         AppendToolCalls(blocks, message?.ToolCalls);
 
         if (blocks.Count == 0)
@@ -112,6 +112,37 @@ public static class NimCompletionTranslator
         }
     }
 
+    /// <summary>Appends a run of answer text, recovering any tool call written into it.</summary>
+    /// <param name="blocks">The blocks being composed.</param>
+    /// <param name="text">The answer text.</param>
+    /// <remarks>
+    /// Models that render a tool call as marker tokens inside their answer would otherwise have
+    /// the whole call shown to the client as literal text and never executed.
+    /// </remarks>
+    private static void AppendText(List<ContentBlock> blocks, string text)
+    {
+        var runs = new List<EmbeddedToolCall>();
+        var parser = new EmbeddedToolCallParser();
+        parser.Feed(text, runs);
+        parser.Flush(runs);
+
+        for (var i = 0; i < runs.Count; i++)
+        {
+            var run = runs[i];
+            if (!run.IsCall)
+            {
+                blocks.Add(ContentBlock.ForText(run.Payload));
+                continue;
+            }
+
+            blocks.Add(new(
+                ContentBlockTypes.ToolUse,
+                Id: $"toolu_{Guid.NewGuid():N}",
+                Name: run.Name,
+                Input: ToolParameterAliases.Restore(JsonElements.ParseOrEmpty(run.Payload))));
+        }
+    }
+
     /// <summary>Appends one classified run of output onto the block it belongs to.</summary>
     /// <param name="blocks">The blocks being composed.</param>
     /// <param name="segment">The run to append.</param>
@@ -120,7 +151,7 @@ public static class NimCompletionTranslator
     {
         if (!segment.IsThinking)
         {
-            blocks.Add(ContentBlock.ForText(segment.Text));
+            AppendText(blocks, segment.Text);
             return;
         }
 
@@ -152,7 +183,7 @@ public static class NimCompletionTranslator
                 ContentBlockTypes.ToolUse,
                 Id: call.Id ?? $"toolu_{Guid.NewGuid():N}",
                 Name: name,
-                Input: JsonElements.ParseOrEmpty(call.Function.Arguments)));
+                Input: ToolParameterAliases.Restore(JsonElements.ParseOrEmpty(call.Function.Arguments))));
         }
     }
 

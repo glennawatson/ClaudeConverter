@@ -1,6 +1,8 @@
 // Copyright (c) 2026 Glenn Watson and Contributors. All rights reserved.
 // Glenn Watson and Contributors licenses this file to you under the MIT license.
 // See the LICENSE file in the project root for full license information.
+using System.Linq;
+using System.Runtime.CompilerServices;
 using ClaudeNim.Aot.Anthropic;
 using ClaudeNim.Aot.Configuration;
 using ClaudeNim.Aot.Nvidia;
@@ -24,6 +26,12 @@ public sealed class NimRequestBuilderTests
 
     /// <summary>The model identifier passed through to the upstream request.</summary>
     private const string UpstreamModel = "nvidia/nemotron-3-super-120b-a12b";
+
+    /// <summary>A model identifier the catalogue states supports image input.</summary>
+    private const string VisionModel = "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning";
+
+    /// <summary>The Claude model name used across the fixture requests.</summary>
+    private const string ClaudeModel = "claude-sonnet-5";
 
     /// <summary>The settings a request is built against.</summary>
     private static readonly NvidiaNimOptions Options = new();
@@ -49,16 +57,17 @@ public sealed class NimRequestBuilderTests
     /// <summary>A reasoning budget is never invented from the output ceiling.</summary>
     /// <returns>A task that completes when the assertion has run.</returns>
     /// <remarks>
-    /// Nemotron 3 Ultra's runner rejects <c>reasoning_budget</c> outright, and on a streamed turn
-    /// does so inside a 200 response. Deriving it from <c>max_tokens</c> made every reasoning turn
-    /// come back empty, which is the regression this test exists to prevent.
+    /// Nemotron 3 Ultra's runner rejects a thinking-token budget outright. Deriving one from
+    /// <c>max_tokens</c> made every reasoning turn come back empty, and on a streamed turn the
+    /// failure arrived inside a 200 response where no status-code retry could catch it. That is
+    /// the regression this test exists to prevent.
     /// </remarks>
     [Test]
     public async Task ReasoningBudgetIsNotDerivedFromMaxTokens()
     {
         var built = NimRequestBuilder.Build(Request(), UpstreamModel, true, Options);
 
-        await Assert.That(built.ChatTemplateKwargs?.ReasoningBudget).IsNull();
+        await Assert.That(built.Extensions).IsNull();
     }
 
     /// <summary>A reasoning budget the caller asked for is forwarded.</summary>
@@ -69,7 +78,7 @@ public sealed class NimRequestBuilderTests
         var thinking = new ThinkingConfig("enabled", BudgetTokens: ExplicitReasoningBudget);
         var built = NimRequestBuilder.Build(Request(thinking: thinking), UpstreamModel, true, Options);
 
-        await Assert.That(built.ChatTemplateKwargs?.ReasoningBudget).IsEqualTo(ExplicitReasoningBudget);
+        await Assert.That(built.Extensions?.MaxThinkingTokens).IsEqualTo(ExplicitReasoningBudget);
     }
 
     /// <summary>Reasoning control is a top-level member, not nested under an envelope.</summary>
@@ -96,7 +105,7 @@ public sealed class NimRequestBuilderTests
     public async Task OutputCeilingIsApplied()
     {
         var request = new MessagesRequest(
-            "claude-sonnet-5",
+            ClaudeModel,
             [new AnthropicMessage(AnthropicMessage.UserRole, MessageContent.FromText("hello"))],
             OversizedMaxTokens);
 
@@ -106,13 +115,71 @@ public sealed class NimRequestBuilderTests
         await Assert.That(built.MaxTokens).IsEqualTo(ConfiguredCeiling);
     }
 
+    /// <summary>An image is forwarded to a model the catalogue states can see it.</summary>
+    /// <returns>A task that completes when the assertions have run.</returns>
+    /// <remarks>
+    /// The listing tells a client a vision model accepts images; the request actually sent has to
+    /// agree, or the capability advertised and the capability delivered quietly diverge.
+    /// </remarks>
+    [Test]
+    public async Task ImageIsForwardedToAVisionModel()
+    {
+        var request = RequestWithImage();
+
+        var built = NimRequestBuilder.Build(request, VisionModel, false, Options);
+
+        var message = UserMessage(built);
+        await Assert.That(message.Content?.IsText).IsFalse();
+
+        var parts = message.Content!.Value.Parts!;
+        await Assert.That(parts.Exists(static p => p.Type == NimContentPart.ImageType)).IsTrue();
+    }
+
+    /// <summary>An image is replaced with a placeholder for a model the catalogue states cannot see it.</summary>
+    /// <returns>A task that completes when the assertions have run.</returns>
+    [Test]
+    public async Task ImageIsPlaceholderedForATextOnlyModel()
+    {
+        var request = RequestWithImage();
+
+        var built = NimRequestBuilder.Build(request, UpstreamModel, false, Options);
+
+        var message = UserMessage(built);
+        await Assert.That(message.Content?.IsText).IsTrue();
+        await Assert.That(message.Content?.Text).Contains("[Image]");
+    }
+
+    /// <summary>Finds the single user message in an upstream request.</summary>
+    /// <param name="request">The upstream request.</param>
+    /// <returns>The user message.</returns>
+    /// <exception cref="InvalidOperationException">The request carried no user message.</exception>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static NimChatMessage UserMessage(NimChatRequest request) =>
+        request.Messages.Single(static m => string.Equals(m.Role, NimChatMessage.UserRole, StringComparison.Ordinal));
+
+    /// <summary>Builds a request whose user turn carries an image alongside text.</summary>
+    /// <returns>The request.</returns>
+    private static MessagesRequest RequestWithImage()
+    {
+        List<ContentBlock> blocks =
+        [
+            ContentBlock.ForText("What is this?"),
+            new(ContentBlockTypes.Image, Source: new ImageSource("base64", "image/png", "Zm9v")),
+        ];
+
+        return new(
+            ClaudeModel,
+            [new AnthropicMessage(AnthropicMessage.UserRole, MessageContent.FromBlocks(blocks))],
+            RequestedMaxTokens);
+    }
+
     /// <summary>Builds a minimal request.</summary>
     /// <param name="streaming">Whether the turn streams.</param>
     /// <param name="thinking">The caller's thinking configuration.</param>
     /// <returns>The Anthropic request.</returns>
     private static MessagesRequest Request(bool streaming = false, ThinkingConfig? thinking = null) =>
         new(
-            "claude-sonnet-5",
+            ClaudeModel,
             [new AnthropicMessage(AnthropicMessage.UserRole, MessageContent.FromText("hello"))],
             RequestedMaxTokens,
             Stream: streaming,

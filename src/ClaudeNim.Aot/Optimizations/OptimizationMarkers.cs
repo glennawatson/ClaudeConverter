@@ -3,36 +3,73 @@
 // See the LICENSE file in the project root for full license information.
 namespace ClaudeNim.Aot.Optimizations;
 
-/// <summary>The phrases that identify a Claude Code housekeeping request.</summary>
+/// <summary>The markers that identify a Claude Code housekeeping request.</summary>
 /// <remarks>
 /// <para>
-/// These are matched against the request's own prompt text. They are deliberately long and
-/// specific: a missed match simply sends the request upstream as normal, which is harmless, while
-/// a false match answers a real question with a canned string, which is not. Length is the cheapest
-/// defence against the second.
+/// These are taken from the detection rules in
+/// <see href="https://github.com/diyism/cc-nim">cc-nim</see>, which were derived from the prompts
+/// Claude Code actually sends, rather than guessed from their descriptions. Several of them are
+/// structural markers the prompt wraps its payload in — <c>&lt;policy_spec&gt;</c>,
+/// <c>[SUGGESTION MODE:</c>, <c>&lt;filepaths&gt;</c> — which makes them far more reliable to match
+/// on than any run of English prose in the instruction itself.
 /// </para>
 /// <para>
-/// The phrases track prompts that Claude Code owns and may reword between releases. Treat a fast
-/// path that stops firing as a wording change rather than a fault.
+/// A missed match simply sends the request upstream, which is harmless. A false match answers a
+/// real question with a canned string, so every rule here requires more than one marker to agree.
 /// </para>
 /// </remarks>
 public static class OptimizationMarkers
 {
-    /// <summary>The probe Claude Code issues to confirm the credential still has quota.</summary>
+    /// <summary>The entire content of the probe Claude Code sends to confirm the credential works.</summary>
     internal const string QuotaProbe = "quota";
 
-    /// <summary>The ceiling a quota probe is sent with, which no real turn uses.</summary>
+    /// <summary>The output ceiling a quota probe is sent with, which no real turn uses.</summary>
     internal const int QuotaProbeMaxTokens = 1;
 
-    /// <summary>The prompt that asks for a short conversation title.</summary>
-    internal const string TitleGeneration = "write a 5-10 word title";
+    /// <summary>The word every conversation-title prompt contains.</summary>
+    internal const string Title = "title";
 
-    /// <summary>The prompt that asks for typeahead suggestions.</summary>
-    internal const string SuggestionMode = "you are a suggestion generator";
+    /// <summary>The bracket a suggestion request wraps its payload in.</summary>
+    internal const string SuggestionMode = "[SUGGESTION MODE:";
 
-    /// <summary>The prompt that asks which prefix a shell command should be permission-matched on.</summary>
-    internal const string CommandPrefix = "process bash commands that an ai coding agent wants to run";
+    /// <summary>The element a command permission prompt wraps its policy in.</summary>
+    internal const string PolicySpec = "<policy_spec>";
 
-    /// <summary>The prompt that asks for the file paths mentioned in a tool result.</summary>
-    internal const string FilePathExtraction = "extract any file paths that this command reads or modifies";
+    /// <summary>The label that introduces the shell command being asked about.</summary>
+    internal const string CommandLabel = "Command:";
+
+    /// <summary>The label that introduces the command's output.</summary>
+    internal const string OutputLabel = "Output:";
+
+    /// <summary>The element a file-path extraction prompt asks to be filled in.</summary>
+    internal const string FilePaths = "filepaths";
+
+    /// <summary>The phrases that, with <see cref="Title"/>, confirm a title-generation prompt.</summary>
+    /// <remarks>
+    /// The word "title" alone appears in far too much ordinary conversation to act on. One of
+    /// these has to appear with it, all of which belong to the instruction rather than the topic.
+    /// </remarks>
+    private static readonly string[] TitleCorroborators =
+    [
+        "sentence-case title",
+        "return json",
+        "coding session",
+        "this session",
+    ];
+
+    /// <summary>Determines whether a prompt carries a phrase that confirms a title request.</summary>
+    /// <param name="system">The system prompt.</param>
+    /// <returns><see langword="true"/> when one of the corroborating phrases is present.</returns>
+    internal static bool IsTitleCorroborated(string system)
+    {
+        foreach (var phrase in TitleCorroborators)
+        {
+            if (system.Contains(phrase, StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
 }

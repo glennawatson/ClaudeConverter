@@ -4,6 +4,7 @@
 using System.Net.Http.Json;
 using ClaudeNim.Aot.Anthropic;
 using ClaudeNim.Aot.Anthropic.Streaming;
+using ClaudeNim.Aot.Configuration;
 using ClaudeNim.Aot.Nvidia;
 using ClaudeNim.Aot.Optimizations;
 using ClaudeNim.Aot.RateLimiting;
@@ -12,7 +13,6 @@ using ClaudeNim.Aot.Serialization;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Routing;
-using Microsoft.Extensions.Logging;
 
 namespace ClaudeNim.Aot.Endpoints;
 
@@ -63,11 +63,9 @@ public static class MessagesEndpointExtensions
         MessageServices services,
         CancellationToken cancellationToken)
     {
-        if (request is null)
+        if (InvalidRequest(request) is { } invalid)
         {
-            return AnthropicErrors.Result(
-                StatusCodes.Status400BadRequest,
-                "The request body was missing or unreadable.");
+            return invalid;
         }
 
         var messageId = $"msg_{Guid.NewGuid():N}";
@@ -103,10 +101,37 @@ public static class MessagesEndpointExtensions
         }
 
         return request.IsStreaming
-            ? await StreamAsync(response, context, request, resolved, messageId, services.Logger, cancellationToken)
+            ? await StreamAsync(response, context, request, resolved, messageId, services, cancellationToken)
                 .ConfigureAwait(false)
-            : await CompleteAsync(response, request, resolved, messageId, cancellationToken)
+            : await CompleteAsync(response, request, resolved, messageId, services.Timeouts, cancellationToken)
                 .ConfigureAwait(false);
+    }
+
+    /// <summary>Validates that a request carries the fields every turn needs.</summary>
+    /// <param name="request">The caller's request, which may be null or incompletely bound.</param>
+    /// <returns>An error result when the request cannot be served, or <see langword="null"/> when it can.</returns>
+    /// <remarks>
+    /// JSON binding does not enforce <c>model</c> or <c>messages</c> as required: a body missing
+    /// either still binds successfully with that member left null, which crashed deeper in the
+    /// pipeline rather than producing the client-facing error the request had actually earned.
+    /// </remarks>
+    private static IResult? InvalidRequest(MessagesRequest? request)
+    {
+        if (request is null)
+        {
+            return AnthropicErrors.Result(
+                StatusCodes.Status400BadRequest,
+                "The request body was missing or unreadable.");
+        }
+
+        if (string.IsNullOrEmpty(request.Model))
+        {
+            return AnthropicErrors.Result(StatusCodes.Status400BadRequest, "The request did not name a model.");
+        }
+
+        return request.Messages is { Count: > 0 }
+            ? null
+            : AnthropicErrors.Result(StatusCodes.Status400BadRequest, "The request carried no messages.");
     }
 
     /// <summary>Answers a housekeeping request without calling the upstream.</summary>
@@ -184,7 +209,7 @@ public static class MessagesEndpointExtensions
     /// <param name="request">The caller's request.</param>
     /// <param name="resolved">The routing outcome.</param>
     /// <param name="messageId">The identifier to report for the message.</param>
-    /// <param name="logger">The diagnostic log.</param>
+    /// <param name="services">The services the turn is served from.</param>
     /// <param name="cancellationToken">Abandons the turn when the client disconnects.</param>
     /// <returns>Always <see langword="null"/>, because the body has already been written.</returns>
     private static async Task<IResult?> StreamAsync(
@@ -193,11 +218,12 @@ public static class MessagesEndpointExtensions
         MessagesRequest request,
         ResolvedModel resolved,
         string messageId,
-        ILogger logger,
+        MessageServices services,
         CancellationToken cancellationToken)
     {
         var writer = await BeginStreamAsync(context).ConfigureAwait(false);
-        var translator = new NimStreamTranslator(writer, resolved.ThinkingEnabled, logger);
+        var idleTimeout = TimeSpan.FromSeconds(services.Timeouts.StreamIdleSeconds);
+        var translator = new NimStreamTranslator(writer, resolved.ThinkingEnabled, idleTimeout, services.Logger);
 
         await using var upstream = await response.Content
             .ReadAsStreamAsync(cancellationToken)
@@ -218,6 +244,7 @@ public static class MessagesEndpointExtensions
     /// <param name="request">The caller's request.</param>
     /// <param name="resolved">The routing outcome.</param>
     /// <param name="messageId">The identifier to report for the message.</param>
+    /// <param name="timeouts">The configured upstream timeouts.</param>
     /// <param name="cancellationToken">Abandons the turn when the client disconnects.</param>
     /// <returns>The Anthropic message.</returns>
     private static async Task<IResult?> CompleteAsync(
@@ -225,10 +252,16 @@ public static class MessagesEndpointExtensions
         MessagesRequest request,
         ResolvedModel resolved,
         string messageId,
+        HttpTimeoutOptions timeouts,
         CancellationToken cancellationToken)
     {
+        // The pooled client carries no timeout of its own, so the body read is bounded here.
+        // Headers were already received; this covers only the wait for the rest of the body.
+        using var bodyTimeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        bodyTimeout.CancelAfter(TimeSpan.FromSeconds(timeouts.ReadSeconds));
+
         var completion = await response.Content
-            .ReadFromJsonAsync(ProxyJsonContext.Default.NimChatCompletion, cancellationToken)
+            .ReadFromJsonAsync(ProxyJsonContext.Default.NimChatCompletion, bodyTimeout.Token)
             .ConfigureAwait(false);
 
         var message = NimCompletionTranslator.Translate(

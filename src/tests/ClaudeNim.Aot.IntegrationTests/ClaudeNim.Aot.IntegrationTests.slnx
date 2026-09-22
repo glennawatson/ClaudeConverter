@@ -1,0 +1,8 @@
+<Solution>
+  <Folder Name="/Solution Items/">
+    <File Path="../../.editorconfig" />
+    <File Path="../.editorconfig" />
+  </Folder>
+  <Project Path="ClaudeNim.Aot.IntegrationTests.csproj" />
+  <Project Path="../../ClaudeNim.Aot/ClaudeNim.Aot.csproj" />
+</Solution>
