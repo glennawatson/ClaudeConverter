@@ -3,6 +3,7 @@
 // See the LICENSE file in the project root for full license information.
 using System.Net.Http.Json;
 using System.Runtime.CompilerServices;
+using System.Text.Json;
 using ClaudeNim.Aot.Anthropic;
 using ClaudeNim.Aot.Anthropic.Streaming;
 using ClaudeNim.Aot.Nvidia;
@@ -97,6 +98,7 @@ public static class MessagesEndpointExtensions
         }
 
         NvidiaLog.SendingTurn(services.Logger, request.Model, resolved.NimModel, request.IsStreaming);
+        LogUpstreamRequestBody(services.Logger, upstreamRequest);
 
         HttpResponseMessage response;
         try
@@ -124,6 +126,25 @@ public static class MessagesEndpointExtensions
                 : await CompleteAsync(response, request, resolved, messageId, services, cancellationToken)
                     .ConfigureAwait(false);
         }
+    }
+
+    /// <summary>Logs the exact request sent upstream, when debug logging is enabled.</summary>
+    /// <param name="logger">The diagnostic log.</param>
+    /// <param name="upstreamRequest">The request about to be sent.</param>
+    /// <remarks>
+    /// Serializing a tool-bearing request is not free, so the check comes first rather than relying
+    /// on the generated log method's own internal one -- that still evaluates this argument eagerly
+    /// before the call, since it is a plain string parameter.
+    /// </remarks>
+    private static void LogUpstreamRequestBody(ILogger logger, NimChatRequest upstreamRequest)
+    {
+        if (!logger.IsEnabled(LogLevel.Debug))
+        {
+            return;
+        }
+
+        var body = JsonSerializer.Serialize(upstreamRequest, ProxyJsonContext.Default.NimChatRequest);
+        NvidiaLog.UpstreamRequestBody(logger, body);
     }
 
     /// <summary>Determines whether an exception represents a failed or timed-out upstream connection.</summary>

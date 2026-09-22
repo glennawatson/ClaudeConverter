@@ -23,4 +23,9 @@ public static class ContentBlockTypes
 
     /// <summary>An image supplied by the caller.</summary>
     internal const string Image = "image";
+
+    /// <summary>A PDF or other document supplied by the caller.</summary>
+    /// <remarks>No advertised NVIDIA NIM model accepts document input; this block is always
+    /// replaced with a placeholder rather than forwarded.</remarks>
+    internal const string Document = "document";
 }

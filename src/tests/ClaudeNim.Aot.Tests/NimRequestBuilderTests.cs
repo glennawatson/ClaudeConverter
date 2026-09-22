@@ -149,6 +149,28 @@ public sealed class NimRequestBuilderTests
         await Assert.That(message.Content?.Text).Contains("[Image]");
     }
 
+    /// <summary>A document is always replaced with a placeholder; no NIM model accepts one.</summary>
+    /// <returns>A task that completes when the assertions have run.</returns>
+    [Test]
+    public async Task DocumentIsAlwaysPlaceholdered()
+    {
+        List<ContentBlock> blocks =
+        [
+            ContentBlock.ForText("Summarise this."),
+            new(ContentBlockTypes.Document, Source: new ImageSource("base64", "application/pdf", "Zm9v")),
+        ];
+        var request = new MessagesRequest(
+            ClaudeModel,
+            [new AnthropicMessage(AnthropicMessage.UserRole, MessageContent.FromBlocks(blocks))],
+            RequestedMaxTokens);
+
+        var built = NimRequestBuilder.Build(request, VisionModel, false, Options);
+
+        var message = UserMessage(built);
+        await Assert.That(message.Content?.IsText).IsTrue();
+        await Assert.That(message.Content?.Text).Contains("[Document]");
+    }
+
     /// <summary>Finds the single user message in an upstream request.</summary>
     /// <param name="request">The upstream request.</param>
     /// <returns>The user message.</returns>

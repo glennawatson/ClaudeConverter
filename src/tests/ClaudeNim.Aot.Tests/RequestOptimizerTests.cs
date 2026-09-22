@@ -52,11 +52,16 @@ public sealed class RequestOptimizerTests
 
     /// <summary>A prefix request is answered from the command it carries.</summary>
     /// <returns>A task that completes when the assertions have run.</returns>
+    /// <remarks>
+    /// <see cref="OptimizationOptions.DetectCommandPrefix"/> defaults to off (see its own remarks),
+    /// so this test opts it in explicitly to cover the extraction logic itself, which is still
+    /// correct and still reachable for a caller that turns the fast path back on.
+    /// </remarks>
     [Test]
     public async Task PrefixRequestIsAnsweredFromItsCommand()
     {
         var request = Request("<policy_spec> rules here\nCommand:\ngit commit -m hi\nOutput:\nok");
-        var recognised = RequestOptimizer.TryAnswer(request, AllOn, out var answer);
+        var recognised = RequestOptimizer.TryAnswer(request, AllOn with { DetectCommandPrefix = true }, out var answer);
 
         await Assert.That(recognised).IsTrue();
         await Assert.That(answer).IsEqualTo("git commit");

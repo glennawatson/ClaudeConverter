@@ -90,6 +90,7 @@ public static class ContentText
             ContentBlockTypes.Thinking => block.Thinking,
             ContentBlockTypes.ToolResult => FromToolResult(block.Content),
             ContentBlockTypes.Image => "[Image]",
+            ContentBlockTypes.Document => "[Document]",
             _ => null,
         };
 

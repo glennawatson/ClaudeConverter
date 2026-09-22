@@ -148,4 +148,33 @@ internal static partial class NvidiaLog
         Level = LogLevel.Warning,
         Message = "The proxy's own rate limit is saturated; a turn was rejected before reaching NIM.")]
     internal static partial void RateLimitSaturated(ILogger logger);
+
+    /// <summary>Records the exact request sent upstream, for diagnosing why a turn's content is wrong.</summary>
+    /// <param name="logger">The log to write to.</param>
+    /// <param name="body">The serialized upstream request.</param>
+    /// <remarks>
+    /// The other log messages establish that a turn was sent and what came back at the transport
+    /// level; neither says anything about the shape of the request itself, which is what a client
+    /// sending something this proxy translates incorrectly needs. Debug-only and off by default,
+    /// since a tool schema can be large and every turn would otherwise pay to log one.
+    /// </remarks>
+    [LoggerMessage(
+        EventId = 1013,
+        Level = LogLevel.Debug,
+        Message = "Upstream request body: {Body}")]
+    internal static partial void UpstreamRequestBody(ILogger logger, string body);
+
+    /// <summary>Records one raw line read from a streamed upstream response.</summary>
+    /// <param name="logger">The log to write to.</param>
+    /// <param name="line">The raw line, including lines this proxy already parses successfully.</param>
+    /// <remarks>
+    /// <see cref="StreamChunkUnreadable"/> only records a line once parsing has already failed;
+    /// this records every line, so a turn that translates cleanly but into the wrong content can
+    /// still be compared against what NIM actually sent. Debug-only for the same reason.
+    /// </remarks>
+    [LoggerMessage(
+        EventId = 1014,
+        Level = LogLevel.Debug,
+        Message = "Upstream stream line: {Line}")]
+    internal static partial void RawStreamLine(ILogger logger, string line);
 }

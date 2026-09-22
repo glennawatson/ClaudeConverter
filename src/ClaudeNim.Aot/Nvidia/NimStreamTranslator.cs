@@ -184,6 +184,11 @@ public sealed class NimStreamTranslator(
     /// <returns><see langword="true"/> when the line ended the turn and no further line should be read.</returns>
     private async ValueTask<bool> ConsumeLineAsync(string line, CancellationToken cancellationToken)
     {
+        if (logger.IsEnabled(LogLevel.Debug))
+        {
+            NvidiaLog.RawStreamLine(logger, line);
+        }
+
         var chunk = ParseChunk(line);
         if (chunk is null)
         {

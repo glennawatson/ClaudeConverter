@@ -12,13 +12,23 @@ namespace ClaudeNim.Aot.Configuration;
 /// <remarks>
 /// Each of these requests has a known, content-free answer. Serving them from the proxy
 /// removes a network round trip and, on a metered upstream, a billed completion.
+/// <para>
+/// <see cref="DetectCommandPrefix"/> defaults to <see langword="false"/>, unlike the others: its
+/// two markers (<c>&lt;policy_spec&gt;</c> and <c>Command:</c>) are not unique to the legacy
+/// manual-permission-mode prefix question it was built for. Claude Code's Auto Mode classifier's
+/// own <c>xml_s1</c> stage sends a request carrying the same markers, and this fast path answered
+/// it with a bare extracted prefix (e.g. <c>"ls"</c>) instead of forwarding it for a real
+/// classification, which the classifier cannot parse as a verdict — it retries several times and
+/// then fails closed with "Auto mode could not evaluate this action". A missed match here is
+/// harmless (a real upstream call); a false match silently broke Auto Mode entirely.
+/// </para>
 /// </remarks>
 [System.Diagnostics.DebuggerDisplay("OptimizationOptions: {ToString(),nq}")]
 public sealed record OptimizationOptions(
     bool MockQuotaProbe = true,
     bool SkipTitleGeneration = true,
     bool SkipSuggestionMode = true,
-    bool DetectCommandPrefix = true,
+    bool DetectCommandPrefix = false,
     bool MockFilePathExtraction = true)
 {
     /// <summary>The configuration section these options are bound from.</summary>

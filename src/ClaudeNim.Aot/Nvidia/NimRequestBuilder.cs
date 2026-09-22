@@ -307,6 +307,7 @@ public static class NimRequestBuilder
         {
             ContentBlockTypes.Text => block.Text,
             ContentBlockTypes.Image => vision ? null : "[Image]",
+            ContentBlockTypes.Document => "[Document]",
             _ => null,
         };
 
