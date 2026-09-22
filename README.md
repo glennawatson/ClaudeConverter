@@ -127,13 +127,26 @@ subsequent turn.
 
 The pooled HTTP client carries no fixed timeout, because a single bound cannot fit both shapes of
 call: a streamed body is bounded by idle time (no bytes for `Timeouts:StreamIdleSeconds`), while
-the wait for a response's headers, and a non-streamed body once headers arrive, are each bounded by
-`Timeouts:ReadSeconds`. Transient upstream failures (`429`, `500`, `502`, `503`, `504`) are retried
-with hand-rolled exponential backoff and full jitter, honouring a `Retry-After` header when the
-upstream sends one. A rejected request (`400`/`500`) is instead retried with progressively less of
-it — reasoning controls first, then replayed reasoning — since a rejection means the upstream will
-never accept that exact body. A failure that arrives inside an already-successful streamed
-response is surfaced as an Anthropic `error` event rather than an empty turn.
+the wait for a streamed response's headers, and a non-streamed body once headers arrive, are each
+bounded by `Timeouts:ReadSeconds`. A non-streamed call gets a bound of its own,
+`Timeouts:CompletionSeconds`, because NIM withholds even the status line until the whole answer is
+generated — so the wait for its headers is the generation, and a reasoning model working through a
+long prompt routinely spends longer on it than any header wait should allow.
+
+Transient upstream failures (`429`, `500`, `502`, `503`, `504`) are retried with hand-rolled
+exponential backoff and equal jitter — half the window waited, the rest spread randomly — honouring
+a `Retry-After` header when the upstream sends one. The budget is five attempts over roughly
+fifteen seconds, which is what NVIDIA's `Service temporarily overloaded` actually takes to clear. A
+streamed turn that failed before producing anything backs off on the same schedule before it is
+asked for again, rather than re-asking in the same instant. A deadline this proxy set itself is the
+one failure never retried: the model that could not finish inside it will not finish inside the
+next one, and spending the budget twice only moves the failure to a client that has given up
+waiting.
+
+A rejected request (`400`/`500`) is instead retried with progressively less of it — reasoning
+controls first, then replayed reasoning — since a rejection means the upstream will never accept
+that exact body. A failure that arrives inside an already-successful streamed response is surfaced
+as an Anthropic `error` event rather than an empty turn.
 
 ## Endpoints
 
