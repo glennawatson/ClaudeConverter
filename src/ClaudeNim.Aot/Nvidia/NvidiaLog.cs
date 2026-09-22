@@ -15,27 +15,51 @@ namespace ClaudeNim.Aot.Nvidia;
 /// </remarks>
 internal static partial class NvidiaLog
 {
+    // Retries and downgrades are warnings, not information. Each one is the proxy silently doing
+    // something other than what it was asked to, and a turn that only succeeds on the third
+    // attempt with half its controls dropped is a degraded turn — indistinguishable, at
+    // Information, from one that worked first time. The operator watching at Warning is the one
+    // who needs to know.
     /// <summary>Records that a model rejected the reasoning controls and the call is being retried.</summary>
     /// <param name="logger">The log to write to.</param>
     /// <param name="model">The model that rejected the request.</param>
     [LoggerMessage(
         EventId = 1000,
-        Level = LogLevel.Information,
+        Level = LogLevel.Warning,
         Message = "NIM rejected {Model} with the reasoning controls set; retrying without them.")]
     internal static partial void ChatTemplateRejected(ILogger logger, string model);
 
     /// <summary>Records that a transient upstream failure is being waited out.</summary>
     /// <param name="logger">The log to write to.</param>
     /// <param name="status">The status the upstream returned.</param>
+    /// <param name="attempt">The attempt that failed.</param>
+    /// <param name="maxAttempts">The configured attempt budget.</param>
     /// <param name="delayMilliseconds">How long the next attempt waits.</param>
     [LoggerMessage(
         EventId = 1008,
-        Level = LogLevel.Information,
-        Message = "NIM returned {Status}; retrying in {DelayMilliseconds}ms.")]
+        Level = LogLevel.Warning,
+        Message = "NIM returned {Status} on attempt {Attempt} of {MaxAttempts}; retrying in {DelayMilliseconds}ms.")]
     internal static partial void RetryingAfterTransientFailure(
         ILogger logger,
         int status,
+        int attempt,
+        int maxAttempts,
         double delayMilliseconds);
+
+    /// <summary>Records that the retry budget ran out with the upstream still failing.</summary>
+    /// <param name="logger">The log to write to.</param>
+    /// <param name="status">The status the last attempt returned.</param>
+    /// <param name="attempts">How many attempts were made.</param>
+    /// <remarks>
+    /// The rejection itself is reported separately, but only as the last status — nothing in it
+    /// says the proxy had already spent its whole budget getting there. A turn that failed once
+    /// and one that failed five times are the same line without this.
+    /// </remarks>
+    [LoggerMessage(
+        EventId = 1015,
+        Level = LogLevel.Warning,
+        Message = "NIM still returned {Status} after {Attempts} attempts; giving up on the turn.")]
+    internal static partial void RetriesExhausted(ILogger logger, int status, int attempts);
 
     /// <summary>Records that the upstream model listing returned a failure status.</summary>
     /// <param name="logger">The log to write to.</param>
@@ -78,6 +102,50 @@ internal static partial class NvidiaLog
         Message = "Skipped an unreadable NIM stream chunk: {Payload}")]
     internal static partial void StreamChunkUnreadable(ILogger logger, string payload, Exception error);
 
+    /// <summary>Records the first unreadable chunk of a turn, where the rest are only recorded at debug.</summary>
+    /// <param name="logger">The log to write to.</param>
+    /// <param name="payload">The payload that could not be read.</param>
+    /// <param name="error">The failure the reader raised.</param>
+    /// <remarks>
+    /// An upstream that changed shape produces one unreadable chunk per delta, so warning on every
+    /// one would bury the log in a single turn. Warning once says the same thing: something in the
+    /// stream stopped parsing. The per-chunk detail stays at debug for when that is being chased.
+    /// </remarks>
+    [LoggerMessage(
+        EventId = 1016,
+        Level = LogLevel.Warning,
+        Message = "A NIM stream chunk could not be read and was skipped; further ones this turn are logged at debug. First: {Payload}")]
+    internal static partial void StreamChunkUnreadableFirst(ILogger logger, string payload, Exception error);
+
+    /// <summary>Records that a streamed turn was abandoned because the upstream went quiet.</summary>
+    /// <param name="logger">The log to write to.</param>
+    /// <param name="idleSeconds">How long the upstream produced nothing before the turn was given up on.</param>
+    /// <remarks>
+    /// This arrives as a cancellation, which is indistinguishable from a dropped connection by
+    /// exception type alone — and the two call for different fixes, so they are reported apart.
+    /// </remarks>
+    [LoggerMessage(
+        EventId = 1017,
+        Level = LogLevel.Warning,
+        Message = "NIM produced nothing for {IdleSeconds}s; the streamed turn was abandoned.")]
+    internal static partial void StreamIdleTimeout(ILogger logger, double idleSeconds);
+
+    /// <summary>Records that a turn finished without the model having produced anything.</summary>
+    /// <param name="logger">The log to write to.</param>
+    /// <param name="chunks">The number of chunks that were read.</param>
+    /// <param name="finishReason">The reason the upstream gave for stopping.</param>
+    /// <remarks>
+    /// An empty turn is not an error at any layer — the call succeeded, the stream was well formed
+    /// — so nothing else reports it. To the client it is the model having nothing to say, which
+    /// for a coding client ends the work. It is the single most confusing way for this proxy to
+    /// fail, so it is recorded where an operator will see it.
+    /// </remarks>
+    [LoggerMessage(
+        EventId = 1018,
+        Level = LogLevel.Warning,
+        Message = "A streamed turn produced no content at all after {Chunks} chunks (finish reason: {FinishReason}).")]
+    internal static partial void EmptyTurn(ILogger logger, int chunks, string finishReason);
+
     /// <summary>Records that the upstream ended a streamed turn with a failure.</summary>
     /// <param name="logger">The log to write to.</param>
     /// <param name="reason">The failure the upstream reported.</param>
@@ -99,10 +167,15 @@ internal static partial class NvidiaLog
 
     /// <summary>Records that the advertised listing is being built from the built-in profiles.</summary>
     /// <param name="logger">The log to write to.</param>
+    /// <remarks>
+    /// The listing a client is shown is now the proxy's own idea of the catalogue rather than
+    /// NVIDIA's, so a model that exists upstream can be missing from the picker and one that was
+    /// retired can still be offered. That is a degraded state, not a routine one.
+    /// </remarks>
     [LoggerMessage(
         EventId = 1004,
-        Level = LogLevel.Information,
-        Message = "Falling back to the built-in NVIDIA NIM model list.")]
+        Level = LogLevel.Warning,
+        Message = "Falling back to the built-in NVIDIA NIM model list; the picker no longer reflects NVIDIA's catalogue.")]
     internal static partial void UsingBuiltInModelList(ILogger logger);
 
     /// <summary>Records that a Messages API turn's own upstream call failed at the transport level.</summary>

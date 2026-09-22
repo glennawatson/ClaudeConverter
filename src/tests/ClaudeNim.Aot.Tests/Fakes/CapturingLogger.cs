@@ -13,6 +13,13 @@ internal sealed class CapturingLogger<TCategoryName> : ILogger<TCategoryName>
     /// <summary>Gets the messages written so far, in call order.</summary>
     public List<string> Messages { get; } = [];
 
+    /// <summary>Gets the level and identifier of each message written, in call order.</summary>
+    /// <remarks>
+    /// The text alone cannot say whether a message would survive the level an operator actually
+    /// runs at, which for the failure records is the whole point of writing them.
+    /// </remarks>
+    public List<(LogLevel Level, int EventId, string Message)> Entries { get; } = [];
+
     /// <inheritdoc/>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public IDisposable? BeginScope<TState>(TState state)
@@ -31,6 +38,9 @@ internal sealed class CapturingLogger<TCategoryName> : ILogger<TCategoryName>
         Func<TState, Exception?, string> formatter)
     {
         ArgumentNullException.ThrowIfNull(formatter);
-        Messages.Add(formatter(state, exception));
+
+        var message = formatter(state, exception);
+        Messages.Add(message);
+        Entries.Add((logLevel, eventId.Id, message));
     }
 }

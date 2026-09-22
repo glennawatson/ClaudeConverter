@@ -2,9 +2,11 @@
 // Glenn Watson and Contributors licenses this file to you under the MIT license.
 // See the LICENSE file in the project root for full license information.
 using System.Net;
+using System.Runtime.CompilerServices;
 using ClaudeNim.Aot.Configuration;
 using ClaudeNim.Aot.Nvidia;
 using ClaudeNim.Aot.Tests.Fakes;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Refit;
 using Refit.Testing;
@@ -183,6 +185,49 @@ public sealed class NimClientTests
 
         await Assert.That(result).IsNull();
     }
+
+    /// <summary>A spent retry budget is reported at a level an operator runs at.</summary>
+    /// <returns>A task that completes when the assertions have run.</returns>
+    /// <remarks>
+    /// The rejection itself is reported by the caller as the last status, which reads the same
+    /// whether the proxy tried once or spent every attempt getting there. Without this record a
+    /// turn that cost three upstream calls is indistinguishable from one that cost one.
+    /// </remarks>
+    [Test]
+    public async Task ExhaustedRetriesAreReportedAsAWarning()
+    {
+        var api = new FakeNimApi { OnSendChat = static _ => new HttpResponseMessage(HttpStatusCode.ServiceUnavailable) };
+        var logger = new CapturingLogger<NimClient>();
+        var client = new NimClient(api, Retries, Timeouts, TimeProvider.System, logger);
+
+        _ = await client.SendChatAsync(RequestWithReasoning, CancellationToken.None);
+
+        var exhausted = Warnings(logger).Find(static entry => entry.Message.Contains("giving up", StringComparison.Ordinal));
+        await Assert.That(exhausted.Message).IsNotNull();
+        await Assert.That(exhausted.Message).Contains("503");
+    }
+
+    /// <summary>Each waited-out attempt is reported at a level an operator runs at.</summary>
+    /// <returns>A task that completes when the assertion has run.</returns>
+    [Test]
+    public async Task ARetriedAttemptIsReportedAsAWarning()
+    {
+        var api = new FakeNimApi { OnSendChat = static _ => new HttpResponseMessage(HttpStatusCode.ServiceUnavailable) };
+        var logger = new CapturingLogger<NimClient>();
+        var client = new NimClient(api, Retries, Timeouts, TimeProvider.System, logger);
+
+        _ = await client.SendChatAsync(RequestWithReasoning, CancellationToken.None);
+
+        var retrying = Warnings(logger).FindAll(static entry => entry.Message.Contains("retrying in", StringComparison.Ordinal));
+        await Assert.That(retrying.Count).IsGreaterThan(0);
+    }
+
+    /// <summary>Collects the entries that survive an operator running at warning level.</summary>
+    /// <param name="logger">The logger the run wrote to.</param>
+    /// <returns>The warning-and-above entries.</returns>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static List<(LogLevel Level, int EventId, string Message)> Warnings(CapturingLogger<NimClient> logger) =>
+        logger.Entries.FindAll(static entry => entry.Level >= LogLevel.Warning);
 
     /// <summary>Builds a client wired to a fake transport.</summary>
     /// <param name="api">The fake transport.</param>

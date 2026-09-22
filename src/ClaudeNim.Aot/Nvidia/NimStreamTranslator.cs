@@ -127,6 +127,12 @@ public sealed class NimStreamTranslator(
         NvidiaLog.StreamCompleted(logger, _chunksRead, _chunksSkipped);
     }
 
+    /// <summary>Clips a payload so one log line stays a line rather than a dump of the whole chunk.</summary>
+    /// <param name="payload">The payload to clip.</param>
+    /// <returns>The payload, no longer than <see cref="LoggedPayloadLength"/>.</returns>
+    private static string Clipped(string payload) =>
+        payload.Length <= LoggedPayloadLength ? payload : payload[..LoggedPayloadLength];
+
     /// <summary>Determines whether an exception represents a failed or timed-out upstream connection.</summary>
     /// <param name="error">The exception the read raised.</param>
     /// <returns><see langword="true"/> when the exception is a transport-level failure.</returns>
@@ -163,7 +169,17 @@ public sealed class NimStreamTranslator(
         }
         catch (Exception error) when (IsUpstreamTransportFailure(error) && !cancellationToken.IsCancellationRequested)
         {
-            NvidiaLog.StreamFailed(logger, error.Message);
+            // The idle clock fires as a cancellation on the linked source, which by type alone is
+            // the same exception a dropped connection raises. The two call for different fixes.
+            if (idle.IsCancellationRequested)
+            {
+                NvidiaLog.StreamIdleTimeout(logger, idleTimeout.TotalSeconds);
+            }
+            else
+            {
+                NvidiaLog.StreamFailed(logger, error.Message);
+            }
+
             await WriteErrorAsync(
                 new("The upstream connection failed or timed out before the turn finished.", Code: StatusCodes.Status503ServiceUnavailable),
                 cancellationToken).ConfigureAwait(false);
@@ -258,12 +274,16 @@ public sealed class NimStreamTranslator(
         catch (JsonException error)
         {
             _chunksSkipped++;
-            if (logger.IsEnabled(LogLevel.Debug))
-            {
-                var logged = payload.Length <= LoggedPayloadLength
-                    ? payload
-                    : payload[..LoggedPayloadLength];
 
+            // Already the rare path, so the clip is paid for once rather than guarded twice.
+            var logged = Clipped(payload);
+
+            if (_chunksSkipped == 1)
+            {
+                NvidiaLog.StreamChunkUnreadableFirst(logger, logged, error);
+            }
+            else if (logger.IsEnabled(LogLevel.Debug))
+            {
                 NvidiaLog.StreamChunkUnreadable(logger, logged, error);
             }
 
@@ -677,6 +697,7 @@ public sealed class NimStreamTranslator(
         // A turn with no content at all is not a valid Anthropic message. Reasoning models that
         if (_nextBlockIndex == 0)
         {
+            NvidiaLog.EmptyTurn(logger, _chunksRead, _finishReason ?? "none reported");
             await AppendTextAsync(" ", cancellationToken).ConfigureAwait(false);
         }
 

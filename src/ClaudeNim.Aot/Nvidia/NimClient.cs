@@ -59,6 +59,8 @@ public sealed record NimClient(
         // Bounded by the retry budget plus the fixed number of downgrade rungs: a downgrade never
         // repeats once applied, so the ladder cannot cycle back to a request already tried.
         var ceiling = Retries.MaxAttempts + NimRequestDowngrade.RungCount;
+        var attempts = 1;
+        var retried = false;
 
         for (var attempt = 1; attempt < ceiling && !response.IsSuccessStatusCode; attempt++)
         {
@@ -68,6 +70,7 @@ public sealed record NimClient(
                 response.Dispose();
                 current = lighter;
                 response = await SendAsync(current, cancellationToken).ConfigureAwait(false);
+                attempts++;
                 continue;
             }
 
@@ -77,11 +80,25 @@ public sealed record NimClient(
             }
 
             var delay = RetrySchedule.Delay(attempt, Retries, response.Headers.RetryAfter, Time.GetUtcNow());
-            NvidiaLog.RetryingAfterTransientFailure(Logger, (int)response.StatusCode, delay.TotalMilliseconds);
+            NvidiaLog.RetryingAfterTransientFailure(
+                Logger,
+                (int)response.StatusCode,
+                attempt,
+                Retries.MaxAttempts,
+                delay.TotalMilliseconds);
 
             response.Dispose();
             await Task.Delay(delay, Time, cancellationToken).ConfigureAwait(false);
             response = await SendAsync(current, cancellationToken).ConfigureAwait(false);
+            attempts++;
+            retried = true;
+        }
+
+        // Only worth saying when more than one attempt was spent: a turn that failed outright is
+        // already reported by the caller, and repeating it here would double every rejection.
+        if (retried && !response.IsSuccessStatusCode)
+        {
+            NvidiaLog.RetriesExhausted(Logger, (int)response.StatusCode, attempts);
         }
 
         return response;

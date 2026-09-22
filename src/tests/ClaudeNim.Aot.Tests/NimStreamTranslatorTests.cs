@@ -4,6 +4,8 @@
 using System.Text;
 using ClaudeNim.Aot.Anthropic.Streaming;
 using ClaudeNim.Aot.Nvidia;
+using ClaudeNim.Aot.Tests.Fakes;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 
 namespace ClaudeNim.Aot.Tests;
@@ -253,6 +255,48 @@ public sealed class NimStreamTranslatorTests
         await Assert.That(body).Contains("\"thinking\":\"weighing it up\"");
         await Assert.That(body).Contains("\"text\":\"the answer\"");
         await Assert.That(body).DoesNotContain("</think>");
+    }
+
+    /// <summary>A turn the model produced nothing for is reported at a level an operator runs at.</summary>
+    /// <returns>A task that completes when the assertions have run.</returns>
+    /// <remarks>
+    /// Nothing else reports this: the call succeeded and the stream was well formed, so no layer
+    /// sees a failure. The client sees a model with nothing to say, which for a coding client ends
+    /// the work — the most confusing way this proxy can fail, and until now a silent one.
+    /// </remarks>
+    [Test]
+    public async Task EmptyTurnIsReportedAsAWarning()
+    {
+        const string Sse = """
+            data: {"choices":[{"delta":{},"finish_reason":"stop"}]}
+
+            data: [DONE]
+
+            """;
+
+        var logger = await TranslateCapturingAsync(Sse);
+
+        var empty = logger.Entries.FindAll(static entry =>
+            entry.Level >= LogLevel.Warning && entry.Message.Contains("no content at all", StringComparison.Ordinal));
+
+        await Assert.That(empty.Count).IsEqualTo(1);
+        await Assert.That(empty[0].Message).Contains("stop");
+    }
+
+    /// <summary>Runs the translator over a raw SSE body and returns the log it wrote.</summary>
+    /// <param name="upstreamSse">The upstream server-sent event body to feed the translator.</param>
+    /// <returns>The logger the run wrote to.</returns>
+    private static async Task<CapturingLogger<NimStreamTranslator>> TranslateCapturingAsync(string upstreamSse)
+    {
+        var logger = new CapturingLogger<NimStreamTranslator>();
+
+        await using var output = new MemoryStream();
+        var translator = new NimStreamTranslator(new AnthropicSseWriter(output), true, false, IdleTimeout, logger);
+
+        await using var upstream = new MemoryStream(Encoding.UTF8.GetBytes(upstreamSse));
+        await translator.TranslateAsync(upstream, "msg_1", "claude-sonnet-5", InputTokens, CancellationToken.None);
+
+        return logger;
     }
 
     /// <summary>Runs the translator over a raw SSE body and returns the framed Anthropic output as text.</summary>
