@@ -1,7 +1,6 @@
 // Copyright (c) 2026 Glenn Watson and Contributors. All rights reserved.
 // Glenn Watson and Contributors licenses this file to you under the MIT license.
 // See the LICENSE file in the project root for full license information.
-using System.Diagnostics.CodeAnalysis;
 using ClaudeNim.Aot.Configuration;
 using ClaudeNim.Aot.Hosting;
 using ClaudeNim.Aot.Serialization;
@@ -12,17 +11,14 @@ namespace ClaudeNim.Aot;
 
 /// <summary>The proxy's entry point.</summary>
 /// <remarks>
-/// A plain class with a <see cref="Main"/> method, rather than top-level statements, so the type
-/// can be referenced directly — by <c>WebApplicationFactory&lt;Program&gt;</c> in the integration
-/// tests, and by anything else that needs to host the app in-process. It is not declared
-/// <see langword="static"/> only because a static type cannot be used as a generic type argument;
-/// the compiler's own implicit constructor is never called by anything in this codebase.
+/// A plain class with a <see cref="Main"/> method, rather than top-level statements, so the
+/// startup sequence reads like ordinary code. Nothing needs to reference this type directly — the
+/// integration tests host the app in-process via <see cref="WebHostMarker"/> instead, since
+/// <c>WebApplicationFactory&lt;TEntryPoint&gt;</c> only uses its type argument to locate the entry
+/// assembly, not to call anything on the type itself. That lets this class stay
+/// <see langword="static"/>, which is what it actually is: every member here is static.
 /// </remarks>
-[SuppressMessage(
-    "Design",
-    "SST1432:Type declares only static members",
-    Justification = "Kept an instance type so it can be used as a generic argument for WebApplicationFactory<Program>.")]
-public sealed class Program
+public static class Program
 {
     /// <summary>Builds and runs the proxy.</summary>
     /// <param name="args">The process command-line arguments.</param>

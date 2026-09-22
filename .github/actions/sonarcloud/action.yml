@@ -132,19 +132,13 @@ runs:
                 // which remove the System.Linq global using on purpose, and the other two judge null-forgiving
                 // operators and null checks against one Roslyn slot's nullability annotations, which differ between
                 // the slots these projects build against.
-                "/d:sonar.issue.ignore.multicriteria=nullForgiving,nullChecks,linqLoops,entryPointType",
+                "/d:sonar.issue.ignore.multicriteria=nullForgiving,nullChecks,linqLoops",
                 "/d:sonar.issue.ignore.multicriteria.nullForgiving.ruleKey=csharpsquid:S8969",
                 "/d:sonar.issue.ignore.multicriteria.nullForgiving.resourceKey=**/*.cs",
                 "/d:sonar.issue.ignore.multicriteria.nullChecks.ruleKey=csharpsquid:S2589",
                 "/d:sonar.issue.ignore.multicriteria.nullChecks.resourceKey=**/*.cs",
                 "/d:sonar.issue.ignore.multicriteria.linqLoops.ruleKey=csharpsquid:S3267",
                 "/d:sonar.issue.ignore.multicriteria.linqLoops.resourceKey=**/*.cs",
-
-                // Program must stay a non-static, constructor-less instance type so it can be used as
-                // WebApplicationFactory<Program>'s generic argument in the integration tests; a private
-                // constructor would itself be flagged as dead code by this repo's own analyzers.
-                "/d:sonar.issue.ignore.multicriteria.entryPointType.ruleKey=csharpsquid:S1118",
-                "/d:sonar.issue.ignore.multicriteria.entryPointType.resourceKey=**/Program.cs",
                 .. Switch("/d:sonar.exclusions=", exclusions),
                 .. Switch("/d:sonar.coverage.exclusions=", coverageExclusions),
                 .. Switch("/d:sonar.cpd.exclusions=", cpdExclusions),
