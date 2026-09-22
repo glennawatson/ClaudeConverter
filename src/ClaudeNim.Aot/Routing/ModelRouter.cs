@@ -21,13 +21,17 @@ public sealed record ModelRouter(ModelRoutingOptions Options) : IModelRouter
     {
         var model = requestedModel ?? string.Empty;
 
+        // A gateway identifier names one model outright. Substituting another would answer as a
+        // model the client did not ask for, having asked for one by name — so it gets no chain.
         if (GatewayModelId.TryDecode(model, out var gatewayModel, out var gatewayThinking))
         {
             return new(model, gatewayModel, ModelTier.Default, gatewayThinking);
         }
 
         var tier = Classify(model);
-        return new(model, ResolveNimModel(tier), tier, ResolveThinking(tier));
+        var nimModel = ResolveNimModel(tier);
+
+        return new(model, nimModel, tier, ResolveThinking(tier), ResolveFallbacks(tier, nimModel));
     }
 
     /// <inheritdoc/>
@@ -53,6 +57,23 @@ public sealed record ModelRouter(ModelRoutingOptions Options) : IModelRouter
             : ModelTier.Default;
     }
 
+    /// <summary>Determines whether a chain already names a model.</summary>
+    /// <param name="chain">The chain built so far.</param>
+    /// <param name="candidate">The model being considered.</param>
+    /// <returns><see langword="true"/> when the chain already holds that name.</returns>
+    private static bool Names(List<string> chain, string candidate)
+    {
+        foreach (var named in chain)
+        {
+            if (string.Equals(named, candidate, StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
     /// <summary>Resolves the NIM model for a given tier.</summary>
     /// <param name="tier">The tier to resolve.</param>
     /// <returns>The NIM model identifier for the tier, or the fallback model.</returns>
@@ -74,6 +95,43 @@ public sealed record ModelRouter(ModelRoutingOptions Options) : IModelRouter
         return string.IsNullOrWhiteSpace(Options.Default)
             ? ModelRoutingOptions.FallbackModel
             : Options.Default;
+    }
+
+    /// <summary>Reads the ordered fallback chain configured for a tier.</summary>
+    /// <param name="tier">The tier to resolve.</param>
+    /// <param name="nimModel">The model already chosen for the tier, which the chain never repeats.</param>
+    /// <returns>The models to try in order, or an empty list when the tier names none.</returns>
+    /// <remarks>
+    /// The chosen model is filtered out rather than left in, because a chain that names it again
+    /// would ask a model that has just said it cannot serve the turn, at the cost of one more
+    /// upstream call and the client's patience. Duplicates go for the same reason.
+    /// </remarks>
+    private List<string> ResolveFallbacks(ModelTier tier, string nimModel)
+    {
+        var configured = tier switch
+        {
+            ModelTier.Opus => Options.OpusFallbacks,
+            ModelTier.Sonnet => Options.SonnetFallbacks,
+            ModelTier.Haiku => Options.HaikuFallbacks,
+            _ => Options.DefaultFallbacks,
+        };
+
+        if (string.IsNullOrWhiteSpace(configured))
+        {
+            return [];
+        }
+
+        List<string> chain = [];
+
+        foreach (var candidate in configured.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+        {
+            if (!string.Equals(candidate, nimModel, StringComparison.OrdinalIgnoreCase) && !Names(chain, candidate))
+            {
+                chain.Add(candidate);
+            }
+        }
+
+        return chain;
     }
 
     /// <summary>Resolves whether thinking is enabled for a given tier.</summary>

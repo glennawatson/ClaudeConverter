@@ -106,14 +106,16 @@ public static class MessagesEndpointExtensions
         // what the client actually waited rather than what the last attempt took.
         var started = Stopwatch.GetTimestamp();
 
+        var turn = new TurnContext(request, upstreamRequest, resolved, messageId);
+
         HttpResponseMessage response;
         try
         {
-            response = await services.Client.SendChatAsync(upstreamRequest, cancellationToken).ConfigureAwait(false);
+            (turn, response) = await SendWithFallbackAsync(turn, services, cancellationToken).ConfigureAwait(false);
         }
         catch (Exception error) when (IsUpstreamTransportFailure(error) && !cancellationToken.IsCancellationRequested)
         {
-            NvidiaLog.LogUpstreamTransportFailure(services.Logger, resolved.NimModel, error);
+            NvidiaLog.LogUpstreamTransportFailure(services.Logger, turn.Resolved.NimModel, error);
             return AnthropicErrors.Result(
                 StatusCodes.Status503ServiceUnavailable,
                 "The upstream connection failed or timed out before a response arrived.");
@@ -122,11 +124,158 @@ public static class MessagesEndpointExtensions
         using (response)
         {
             var elapsed = (long)Stopwatch.GetElapsedTime(started).TotalMilliseconds;
-            NvidiaLog.TurnAnswered(services.Logger, resolved.NimModel, (int)response.StatusCode, elapsed);
+            NvidiaLog.TurnAnswered(services.Logger, turn.Resolved.NimModel, (int)response.StatusCode, elapsed);
 
-            var turn = new TurnContext(request, upstreamRequest, resolved, messageId);
             return await DispatchAsync(response, context, turn, services, cancellationToken).ConfigureAwait(false);
         }
+    }
+
+    /// <summary>Sends a turn, walking the tier's fallback chain while the upstream is unavailable.</summary>
+    /// <param name="turn">The turn being served, as routing left it.</param>
+    /// <param name="services">The services the turn is served from.</param>
+    /// <param name="cancellationToken">Abandons the turn when the client disconnects.</param>
+    /// <returns>The turn as the model that answered it left it, and that model's response.</returns>
+    /// <remarks>
+    /// <para>
+    /// NVIDIA's free tier saturates one model at a time, and which one rotates through the day —
+    /// so a turn that cannot be served by the model it routed to can very often be served in full
+    /// by the next one down. That is only worth anything if the switch is quick: each candidate
+    /// gets a single attempt here, because waiting out a busy model cannot beat asking one that is
+    /// not busy, and the whole chain is walked in about as long as one retry would have taken.
+    /// </para>
+    /// <para>
+    /// When every model in the chain is unavailable, the turn goes back to the one it routed to
+    /// with the full retry budget. Patience is the right answer once there is nowhere else to go,
+    /// and that is the behaviour a deployment configuring no chain at all keeps.
+    /// </para>
+    /// </remarks>
+    private static async Task<TurnAttempt> SendWithFallbackAsync(
+        TurnContext turn,
+        MessageServices services,
+        CancellationToken cancellationToken)
+    {
+        var alternatives = turn.Resolved.Alternatives;
+
+        if (alternatives.Count == 0)
+        {
+            return new(turn, await services.Client.SendChatAsync(turn.UpstreamRequest, cancellationToken).ConfigureAwait(false));
+        }
+
+        var current = turn;
+
+        for (var candidate = 0; candidate < alternatives.Count; candidate++)
+        {
+            var attempt = await TryOnceAsync(current, services, cancellationToken).ConfigureAwait(false);
+
+            if (attempt.Response is { } answered)
+            {
+                return new(current, answered);
+            }
+
+            var next = alternatives[candidate];
+            NvidiaLog.FallingBackToAnotherModel(services.Logger, current.Resolved.NimModel, next, attempt.Status);
+            current = Rerouted(turn, services, next, Remaining(alternatives, candidate + 1));
+        }
+
+        var last = await TryOnceAsync(current, services, cancellationToken).ConfigureAwait(false);
+
+        // Everything was busy. The model the turn was actually routed to is the one worth waiting
+        // for, rather than whichever happened to be last in the chain.
+        return last.Response is { } served
+            ? new(current, served)
+            : new(turn, await services.Client.SendChatAsync(turn.UpstreamRequest, cancellationToken).ConfigureAwait(false));
+    }
+
+    /// <summary>Makes one attempt at a turn, reporting an unavailable model as no answer at all.</summary>
+    /// <param name="turn">The turn to attempt.</param>
+    /// <param name="services">The services the turn is served from.</param>
+    /// <param name="cancellationToken">Abandons the turn when the client disconnects.</param>
+    /// <returns>The response, or <see langword="null"/> when this model cannot serve the turn now.</returns>
+    /// <remarks>
+    /// A rejection is not an unavailable model and is returned as it stands: the next model would
+    /// reject the same body for the same reason, and walking a chain to collect three identical
+    /// 400s helps no one.
+    /// </remarks>
+    private static async Task<ModelAttempt> TryOnceAsync(
+        TurnContext turn,
+        MessageServices services,
+        CancellationToken cancellationToken)
+    {
+        HttpResponseMessage response;
+        try
+        {
+            response = await services.Client
+                .SendChatAsync(turn.UpstreamRequest, maxAttempts: 1, cancellationToken)
+                .ConfigureAwait(false);
+        }
+        catch (Exception error) when (IsUpstreamTransportFailure(error) && !cancellationToken.IsCancellationRequested)
+        {
+            // A model that never answered is as unavailable as one that said so.
+            NvidiaLog.LogUpstreamTransportFailure(services.Logger, turn.Resolved.NimModel, error);
+            return new(null, 0);
+        }
+
+        if (!RetrySchedule.IsTransient(response.StatusCode))
+        {
+            return new(response, (int)response.StatusCode);
+        }
+
+        var status = (int)response.StatusCode;
+        response.Dispose();
+
+        return new(null, status);
+    }
+
+    /// <summary>Rebuilds a turn around the next model in its fallback chain.</summary>
+    /// <param name="turn">The turn as routing left it.</param>
+    /// <param name="services">The services the turn is served from.</param>
+    /// <param name="next">The model to address it to.</param>
+    /// <param name="remaining">What is left of the chain after that model.</param>
+    /// <returns>The turn, addressed to the next model.</returns>
+    /// <remarks>
+    /// The body is built again rather than having its model swapped, because a request is shaped
+    /// for the model it is bound for: its output ceiling comes from that model's own, an image is
+    /// forwarded or placeholdered according to whether that model has vision, and its reasoning
+    /// controls are the ones that model's chat template takes.
+    /// </remarks>
+    private static TurnContext Rerouted(
+        TurnContext turn,
+        MessageServices services,
+        string next,
+        IReadOnlyList<string> remaining)
+    {
+        var resolved = turn.Resolved with { NimModel = next, Fallbacks = remaining };
+
+        return turn with
+        {
+            Resolved = resolved,
+            UpstreamRequest = NimRequestBuilder.Build(
+                turn.Request,
+                next,
+                resolved.ThinkingEnabled,
+                services.Nim,
+                services.Catalog.DefaultMaxOutputTokens),
+        };
+    }
+
+    /// <summary>Takes the part of a chain that has not been tried yet.</summary>
+    /// <param name="alternatives">The chain being walked.</param>
+    /// <param name="candidate">The one-based position just moved to.</param>
+    /// <returns>The models after that position.</returns>
+    /// <remarks>
+    /// A re-issued streamed turn walks the chain again from wherever it got to, so the models
+    /// already found unavailable are dropped rather than asked a second time.
+    /// </remarks>
+    private static List<string> Remaining(IReadOnlyList<string> alternatives, int candidate)
+    {
+        List<string> rest = [];
+
+        for (var i = candidate; i < alternatives.Count; i++)
+        {
+            rest.Add(alternatives[i]);
+        }
+
+        return rest;
     }
 
     /// <summary>Hands a successful upstream response to the translator its shape calls for.</summary>
@@ -300,6 +449,7 @@ public static class MessagesEndpointExtensions
         var request = turn.Request;
         var inputTokens = TokenEstimator.Estimate(request.Messages, request.System, request.Tools);
 
+        var active = turn;
         var current = response;
         var owned = false;
 
@@ -307,8 +457,8 @@ public static class MessagesEndpointExtensions
         {
             for (var attempt = 1; true; attempt++)
             {
-                var translator = NewTranslator(writer, turn.Resolved, services);
-                var outcome = await TranslateStreamAsync(current, translator, turn, inputTokens, services, cancellationToken)
+                var translator = NewTranslator(writer, active.Resolved, services);
+                var outcome = await TranslateStreamAsync(current, translator, active, inputTokens, services, cancellationToken)
                     .ConfigureAwait(false);
 
                 if (outcome != StreamTurnOutcome.FailedBeforeOutput)
@@ -322,11 +472,11 @@ public static class MessagesEndpointExtensions
                 if (attempt >= services.Retries.MaxAttempts)
                 {
                     await translator.WriteHeldFailureAsync(cancellationToken).ConfigureAwait(false);
-                    NvidiaLog.StreamRetriesExhausted(services.Logger, turn.Resolved.NimModel, attempt);
+                    NvidiaLog.StreamRetriesExhausted(services.Logger, active.Resolved.NimModel, attempt);
                     return null;
                 }
 
-                NvidiaLog.RetryingStreamBeforeOutput(services.Logger, turn.Resolved.NimModel, attempt, services.Retries.MaxAttempts);
+                NvidiaLog.RetryingStreamBeforeOutput(services.Logger, active.Resolved.NimModel, attempt, services.Retries.MaxAttempts);
 
                 if (owned)
                 {
@@ -339,7 +489,12 @@ public static class MessagesEndpointExtensions
                 var backoff = RetrySchedule.Delay(attempt, services.Retries, retryAfter: null, services.Time.GetUtcNow());
                 await Task.Delay(backoff, services.Time, cancellationToken).ConfigureAwait(false);
 
-                current = await services.Client.SendChatAsync(turn.UpstreamRequest, cancellationToken).ConfigureAwait(false);
+                // Re-issued through the chain rather than at the same model: a stream that ends
+                // before it produces anything is how this upstream reports saturation from inside
+                // a 200, so the model that just did it is the least likely of the lot to answer.
+                var reissued = await SendWithFallbackAsync(active, services, cancellationToken).ConfigureAwait(false);
+                active = reissued.Turn;
+                current = reissued.Response;
                 owned = true;
 
                 if (current.IsSuccessStatusCode)
@@ -373,7 +528,7 @@ public static class MessagesEndpointExtensions
     /// </remarks>
     private static NimStreamTranslator NewTranslator(
         AnthropicSseWriter writer,
-        ResolvedModel resolved,
+        in ResolvedModel resolved,
         MessageServices services)
     {
         // A reasoning model may have had its opening <think> written by the chat template rather
@@ -444,7 +599,7 @@ public static class MessagesEndpointExtensions
     /// and answered in the shape it asked for.
     /// </para>
     /// </remarks>
-    private static ResolvedModel WithoutReasoningForMachines(ResolvedModel resolved, MessagesRequest request) =>
+    private static ResolvedModel WithoutReasoningForMachines(in ResolvedModel resolved, MessagesRequest request) =>
         request.OutputConfig?.Format is null ? resolved : resolved with { ThinkingEnabled = false };
 
     /// <summary>Reads a non-streamed body, recording it before it is parsed.</summary>

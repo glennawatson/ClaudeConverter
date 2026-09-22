@@ -95,6 +95,23 @@ internal static partial class NvidiaLog
         bool streaming,
         Exception error);
 
+    /// <summary>Records that a turn is being served by a fallback model instead of the one it routed to.</summary>
+    /// <param name="logger">The log to write to.</param>
+    /// <param name="model">The model that could not serve the turn.</param>
+    /// <param name="fallback">The model being tried instead.</param>
+    /// <param name="status">The status the unavailable model returned, or 0 when it never answered.</param>
+    /// <remarks>
+    /// The client is not told about this: it asked for a tier and it gets an answer, which is the
+    /// point. But it is now being answered by a model it did not route to, and on the free tier
+    /// that is usually a weaker one — so the substitution is a warning rather than a detail, and
+    /// it names both ends so a chain that always lands on the same rung is visible as one.
+    /// </remarks>
+    [LoggerMessage(
+        EventId = 1027,
+        Level = LogLevel.Warning,
+        Message = "{Model} was unavailable (status {Status}); serving this turn with {Fallback} instead.")]
+    internal static partial void FallingBackToAnotherModel(ILogger logger, string model, string fallback, int status);
+
     /// <summary>Records that a streamed turn is being asked for again, having produced nothing.</summary>
     /// <param name="logger">The log to write to.</param>
     /// <param name="model">The NIM model the turn was sent to.</param>

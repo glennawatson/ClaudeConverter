@@ -12,6 +12,21 @@ public sealed class ModelRouterTests
     /// <summary>The upstream model identifier used across the gateway-encoding fixtures.</summary>
     private const string UpstreamModel = "nvidia/nemotron-3-ultra-550b-a55b";
 
+    /// <summary>The model a tier resolves to across the fallback fixtures.</summary>
+    private const string FallbackFirst = "nvidia/nemotron-3-super-120b-a12b";
+
+    /// <summary>The first alternative across the fallback fixtures.</summary>
+    private const string FallbackSecond = "nvidia/nemotron-3.5-lightning-30b-a3b";
+
+    /// <summary>The second alternative across the fallback fixtures.</summary>
+    private const string FallbackThird = "deepseek-ai/deepseek-v4.1-flash";
+
+    /// <summary>The number of alternatives the ordered-chain fixture configures.</summary>
+    private const int ConfiguredFallbackCount = 2;
+
+    /// <summary>The Sonnet-tier name the classification and chain fixtures ask for.</summary>
+    private const string SonnetName = "claude-sonnet-5";
+
     /// <summary>A gateway identifier the proxy itself advertised is decoded, not classified.</summary>
     /// <returns>A task that completes when the assertions have run.</returns>
     [Test]
@@ -62,7 +77,7 @@ public sealed class ModelRouterTests
         var options = new ModelRoutingOptions(Default: "vendor/default-model");
         var router = new ModelRouter(options);
 
-        var resolved = router.Resolve("claude-sonnet-5");
+        var resolved = router.Resolve(SonnetName);
 
         await Assert.That(resolved.NimModel).IsEqualTo("vendor/default-model");
     }
@@ -116,6 +131,68 @@ public sealed class ModelRouterTests
         var router = new ModelRouter(new ModelRoutingOptions());
 
         await Assert.That(router.Classify("claude-haiku-4-5")).IsEqualTo(ModelTier.Haiku);
-        await Assert.That(router.Classify("claude-sonnet-5")).IsEqualTo(ModelTier.Sonnet);
+        await Assert.That(router.Classify(SonnetName)).IsEqualTo(ModelTier.Sonnet);
+    }
+
+    /// <summary>A tier's fallback chain is read in the order it was configured.</summary>
+    /// <returns>A task that completes when the assertions have run.</returns>
+    [Test]
+    public async Task TierFallbackChainIsResolvedInOrder()
+    {
+        var options = new ModelRoutingOptions(
+            Sonnet: FallbackFirst,
+            SonnetFallbacks: $"{FallbackSecond}, {FallbackThird}");
+        var router = new ModelRouter(options);
+
+        var resolved = router.Resolve(SonnetName);
+
+        await Assert.That(resolved.NimModel).IsEqualTo(FallbackFirst);
+        await Assert.That(resolved.Alternatives.Count).IsEqualTo(ConfiguredFallbackCount);
+        await Assert.That(resolved.Alternatives[0]).IsEqualTo(FallbackSecond);
+        await Assert.That(resolved.Alternatives[1]).IsEqualTo(FallbackThird);
+    }
+
+    /// <summary>A chain never names the model the tier already resolved to, nor repeats one.</summary>
+    /// <returns>A task that completes when the assertions have run.</returns>
+    /// <remarks>
+    /// Either would spend an upstream call, and the client's patience, asking a model that has
+    /// just said it cannot serve the turn.
+    /// </remarks>
+    [Test]
+    public async Task ChainDropsTheResolvedModelAndDuplicates()
+    {
+        var options = new ModelRoutingOptions(
+            Sonnet: FallbackFirst,
+            SonnetFallbacks: $"{FallbackFirst},{FallbackSecond},{FallbackSecond}");
+        var router = new ModelRouter(options);
+
+        var resolved = router.Resolve(SonnetName);
+
+        await Assert.That(resolved.Alternatives.Count).IsEqualTo(1);
+        await Assert.That(resolved.Alternatives[0]).IsEqualTo(FallbackSecond);
+    }
+
+    /// <summary>A tier with no configured chain resolves to no alternatives at all.</summary>
+    /// <returns>A task that completes when the assertion has run.</returns>
+    [Test]
+    public async Task UnconfiguredChainHasNoAlternatives() =>
+        await Assert.That(new ModelRouter(new ModelRoutingOptions()).Resolve(SonnetName).Alternatives.Count)
+            .IsEqualTo(0);
+
+    /// <summary>A model named by gateway identifier is never substituted for another.</summary>
+    /// <returns>A task that completes when the assertion has run.</returns>
+    /// <remarks>
+    /// The client picked that model from the listing this proxy advertised. Answering as a
+    /// different one would be answering as a model it did not ask for, having asked by name.
+    /// </remarks>
+    [Test]
+    public async Task GatewayIdentifierGetsNoFallbackChain()
+    {
+        var options = new ModelRoutingOptions(DefaultFallbacks: FallbackSecond);
+        var router = new ModelRouter(options);
+
+        var resolved = router.Resolve(GatewayModelId.Encode(UpstreamModel));
+
+        await Assert.That(resolved.Alternatives.Count).IsEqualTo(0);
     }
 }

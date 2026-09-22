@@ -148,6 +148,28 @@ controls first, then replayed reasoning — since a rejection means the upstream
 that exact body. A failure that arrives inside an already-successful streamed response is surfaced
 as an Anthropic `error` event rather than an empty turn.
 
+### Fallback models
+
+NVIDIA's free tier saturates one model at a time, and which one rotates through the day: the tier
+that answers every request for an hour is the one returning `429` for the next. Each Claude tier can
+name an ordered chain of models to serve its turns when the one it routes to cannot —
+`ModelRouting:OpusFallbacks`, `SonnetFallbacks`, `HaikuFallbacks`, `DefaultFallbacks`,
+comma-separated, or the flat `OPUS_FALLBACK_MODELS` form.
+
+The chain is walked on one attempt a model, because waiting out a busy model cannot beat asking one
+that is not busy — the whole chain costs about as long as a single retry would have. Only when every
+model in it is unavailable does the turn go back to the one it routed to and spend the full retry
+budget there, which is what a deployment naming no chain keeps doing. A streamed turn that failed
+before it produced anything re-issues down the chain too, so a saturated model gets one chance to
+start a stream rather than all of them.
+
+What the chain does not cover is a rejected request: a `400` is a property of the body, not of the
+model's availability, and the next model would refuse it for the same reason. Nor does a model
+named by its gateway identifier get a chain — the client picked that model from the listing this
+proxy advertised, and answering as a different one is not a substitution it asked for. Every
+substitution is logged at warning naming both models, because the tier the client asked for is now
+being served by something else, usually weaker.
+
 ## Endpoints
 
 | Route | Notes |

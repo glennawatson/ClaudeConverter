@@ -41,6 +41,15 @@ public sealed class MessagesEndpointExtensionsTests
     /// <summary>The number of upstream calls one retried streamed turn takes.</summary>
     private const int CallsAfterOneStreamRetry = 2;
 
+    /// <summary>The model the fallback fixtures configure as the tier's alternative.</summary>
+    private const string FallbackModel = "nvidia/nemotron-3.5-lightning-30b-a3b";
+
+    /// <summary>The number of upstream calls a turn takes when its first model steps aside for one fallback.</summary>
+    private const int CallsAfterOneFallback = 2;
+
+    /// <summary>The number of upstream calls a turn takes when a one-model chain is walked and then waited out.</summary>
+    private const int CallsAfterExhaustedChain = 3;
+
     /// <summary>Retry settings whose backoff is short enough that a re-issued turn does not slow the suite.</summary>
     private static readonly RetryOptions FastRetries = new(BaseDelayMilliseconds: 1, MaxDelayMilliseconds: 2, UseJitter: false);
 
@@ -177,6 +186,93 @@ public sealed class MessagesEndpointExtensionsTests
         await Assert.That(client.Requests.Count).IsEqualTo(CallsAfterOneStreamRetry);
         await Assert.That(body).Contains("recovered");
         await Assert.That(body).DoesNotContain("overloaded");
+    }
+
+    /// <summary>A turn the routed model cannot serve is served by the next model in the chain.</summary>
+    /// <returns>A task that completes when the assertions have run.</returns>
+    /// <remarks>
+    /// NVIDIA's free tier saturates one model at a time and rotates which one through the day, so
+    /// the turn the routed model has to refuse is very often one the next model answers in full.
+    /// </remarks>
+    [Test]
+    public async Task UnavailableModelIsReplacedByItsFallback()
+    {
+        var completion = new NimChatCompletion(
+            Choices: [new NimChoice(Message: new NimChatMessage(AssistantRole, NimContent.FromText("served")))]);
+
+        var client = new FakeNimClient
+        {
+            OnSendChat = request => request.Model == UpstreamModel
+                ? new HttpResponseMessage(HttpStatusCode.TooManyRequests)
+                : JsonResponse(HttpStatusCode.OK, completion),
+        };
+
+        List<AnthropicMessage> messages = [new(AnthropicMessage.UserRole, MessageContent.FromText(OrdinaryUserText))];
+        var request = new MessagesRequest(ClaudeModel, messages, OrdinaryMaxTokens);
+
+        var result = await MessagesEndpointExtensions.SendMessageAsync(
+            request,
+            Context(),
+            Services(client, FallbackModel),
+            CancellationToken.None);
+
+        var message = ((JsonHttpResult<MessagesResponse>)result!).Value!;
+
+        await Assert.That(message.Content[0].Text).IsEqualTo("served");
+        await Assert.That(client.Requests.Count).IsEqualTo(CallsAfterOneFallback);
+        await Assert.That(client.Requests[1].Model).IsEqualTo(FallbackModel);
+    }
+
+    /// <summary>Walking the chain spends one attempt a model, not the whole retry budget.</summary>
+    /// <returns>A task that completes when the assertions have run.</returns>
+    /// <remarks>
+    /// Waiting out a busy model cannot beat asking one that is not busy, so the chain is walked
+    /// first and quickly. Only once every model has refused is the routed one waited on with the
+    /// full budget, which is the behaviour of a deployment that configures no chain at all.
+    /// </remarks>
+    [Test]
+    public async Task ChainIsWalkedOnOneAttemptEachThenWaitedOut()
+    {
+        var client = new FakeNimClient { OnSendChat = static _ => new HttpResponseMessage(HttpStatusCode.ServiceUnavailable) };
+
+        List<AnthropicMessage> messages = [new(AnthropicMessage.UserRole, MessageContent.FromText(OrdinaryUserText))];
+        var request = new MessagesRequest(ClaudeModel, messages, OrdinaryMaxTokens);
+
+        _ = await MessagesEndpointExtensions.SendMessageAsync(
+            request,
+            Context(),
+            Services(client, FallbackModel),
+            CancellationToken.None);
+
+        await Assert.That(client.Budgets.Count).IsEqualTo(CallsAfterExhaustedChain);
+        await Assert.That(client.Budgets[0]).IsEqualTo(1);
+        await Assert.That(client.Budgets[1]).IsEqualTo(1);
+        await Assert.That(client.Budgets[2]).IsGreaterThan(1);
+        await Assert.That(client.Requests[2].Model).IsEqualTo(UpstreamModel);
+    }
+
+    /// <summary>A rejected request is not walked down the chain to be rejected again.</summary>
+    /// <returns>A task that completes when the assertions have run.</returns>
+    /// <remarks>
+    /// A rejection is a property of the body, not of the model's availability. The next model
+    /// would refuse the same body for the same reason, so the chain buys nothing but latency.
+    /// </remarks>
+    [Test]
+    public async Task RejectedRequestIsNotWalkedDownTheChain()
+    {
+        var client = new FakeNimClient { OnSendChat = static _ => new HttpResponseMessage(HttpStatusCode.BadRequest) { Content = new StringContent("no") } };
+
+        List<AnthropicMessage> messages = [new(AnthropicMessage.UserRole, MessageContent.FromText(OrdinaryUserText))];
+        var request = new MessagesRequest(ClaudeModel, messages, OrdinaryMaxTokens);
+
+        var result = await MessagesEndpointExtensions.SendMessageAsync(
+            request,
+            Context(),
+            Services(client, FallbackModel),
+            CancellationToken.None);
+
+        await Assert.That(((JsonHttpResult<ErrorResponse>)result!).StatusCode).IsEqualTo(StatusCodes.Status400BadRequest);
+        await Assert.That(client.Requests.Count).IsEqualTo(1);
     }
 
     /// <summary>A streamed turn that never produces anything reports the failure in the end.</summary>
@@ -403,6 +499,24 @@ public sealed class MessagesEndpointExtensionsTests
     private static MessageServices Services(FakeNimClient client) =>
         new(
             new FakeModelRouter(new(ClaudeModel, UpstreamModel, ModelTier.Sonnet, true)),
+            client,
+            new RequestGate(new RateLimitOptions(RequestsPerWindow: 0, MaxConcurrency: 0)),
+            new NvidiaNimOptions(),
+            FastRetries,
+            new ModelCatalogOptions(),
+            new OptimizationOptions(),
+            new HttpTimeoutOptions(),
+            TimeProvider.System,
+            NullLogger<MessageServices>.Instance);
+
+    /// <summary>Builds the services a turn is served from, with a fallback chain behind the routed model.</summary>
+    /// <param name="client">The fake upstream client.</param>
+    /// <param name="fallback">The model the routed one steps aside for.</param>
+    /// <returns>The services.</returns>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static MessageServices Services(FakeNimClient client, string fallback) =>
+        new(
+            new FakeModelRouter(new(ClaudeModel, UpstreamModel, ModelTier.Sonnet, true, [fallback])),
             client,
             new RequestGate(new RateLimitOptions(RequestsPerWindow: 0, MaxConcurrency: 0)),
             new NvidiaNimOptions(),

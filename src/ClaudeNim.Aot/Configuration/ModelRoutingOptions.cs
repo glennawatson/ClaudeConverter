@@ -12,7 +12,12 @@ namespace ClaudeNim.Aot.Configuration;
 /// <param name="EnableOpusThinking">The reasoning override for Opus-tier requests.</param>
 /// <param name="EnableSonnetThinking">The reasoning override for Sonnet-tier requests.</param>
 /// <param name="EnableHaikuThinking">The reasoning override for Haiku-tier requests.</param>
+/// <param name="DefaultFallbacks">The models to try, in order, when the default tier's own is unavailable.</param>
+/// <param name="OpusFallbacks">The models to try, in order, when the Opus tier's own is unavailable.</param>
+/// <param name="SonnetFallbacks">The models to try, in order, when the Sonnet tier's own is unavailable.</param>
+/// <param name="HaikuFallbacks">The models to try, in order, when the Haiku tier's own is unavailable.</param>
 /// <remarks>
+/// <para>
 /// <see cref="EnableSonnetThinking"/> defaults to off, unlike the other tiers. Claude Code's Auto
 /// Mode classifier always evaluates actions against a Sonnet-tier model, regardless of which model
 /// the user is actually working with, and it sends a large system prompt (~150,000 characters
@@ -21,6 +26,13 @@ namespace ClaudeNim.Aot.Configuration;
 /// because the classifier only needs a terse verdict, not a worked chain of thought. A real
 /// Sonnet-tier coding request loses the reasoning step too, which is the trade-off: faster and
 /// less verbose everywhere the Sonnet tier is used, in exchange for Auto Mode staying responsive.
+/// </para>
+/// <para>
+/// The fallback chains are comma-separated so a single flat environment variable can carry one,
+/// matching how every other name here is set. They are empty by default: substituting a model the
+/// operator did not name is not something to start doing to an existing deployment on its next
+/// restart. Naming one is opting in to a weaker answer over no answer.
+/// </para>
 /// </remarks>
 [System.Diagnostics.DebuggerDisplay("ModelRoutingOptions: {ToString(),nq}")]
 public sealed record ModelRoutingOptions(
@@ -31,7 +43,11 @@ public sealed record ModelRoutingOptions(
     bool EnableThinking = true,
     bool? EnableOpusThinking = null,
     bool? EnableSonnetThinking = false,
-    bool? EnableHaikuThinking = null)
+    bool? EnableHaikuThinking = null,
+    string DefaultFallbacks = "",
+    string OpusFallbacks = "",
+    string SonnetFallbacks = "",
+    string HaikuFallbacks = "")
 {
     /// <summary>The configuration section these options are bound from.</summary>
     internal const string SectionName = "ModelRouting";

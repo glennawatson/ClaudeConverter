@@ -49,18 +49,30 @@ public sealed record NimClient(
     ILogger<NimClient> Logger) : INimClient
 {
     /// <inheritdoc/>
+    [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.AggressiveInlining)]
+    public ValueTask<HttpResponseMessage> SendChatAsync(
+        NimChatRequest request,
+        CancellationToken cancellationToken) =>
+        SendChatAsync(request, Retries.MaxAttempts, cancellationToken);
+
+    /// <inheritdoc/>
     public async ValueTask<HttpResponseMessage> SendChatAsync(
         NimChatRequest request,
+        int maxAttempts,
         CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(request);
 
+        // A caller cannot buy itself more patience than the operator configured, and one
+        // attempt is the floor: a call that is never made cannot answer.
+        var budget = Math.Clamp(maxAttempts, 1, Retries.MaxAttempts);
+
         var current = request;
-        var response = await SendAsync(current, cancellationToken).ConfigureAwait(false);
+        var response = await SendAsync(current, budget, cancellationToken).ConfigureAwait(false);
 
         // Bounded by the retry budget plus the fixed number of downgrade rungs: a downgrade never
         // repeats once applied, so the ladder cannot cycle back to a request already tried.
-        var ceiling = Retries.MaxAttempts + NimRequestDowngrade.RungCount;
+        var ceiling = budget + NimRequestDowngrade.RungCount;
         var attempts = 1;
         var retried = false;
 
@@ -71,12 +83,12 @@ public sealed record NimClient(
                 NvidiaLog.ChatTemplateRejected(Logger, current.Model);
                 response.Dispose();
                 current = lighter;
-                response = await SendAsync(current, cancellationToken).ConfigureAwait(false);
+                response = await SendAsync(current, budget, cancellationToken).ConfigureAwait(false);
                 attempts++;
                 continue;
             }
 
-            if (attempt >= Retries.MaxAttempts || !RetrySchedule.IsTransient(response.StatusCode))
+            if (attempt >= budget || !RetrySchedule.IsTransient(response.StatusCode))
             {
                 break;
             }
@@ -87,12 +99,12 @@ public sealed record NimClient(
                 current.Model,
                 (int)response.StatusCode,
                 attempt,
-                Retries.MaxAttempts,
+                budget,
                 delay.TotalMilliseconds);
 
             response.Dispose();
             await Task.Delay(delay, Time, cancellationToken).ConfigureAwait(false);
-            response = await SendAsync(current, cancellationToken).ConfigureAwait(false);
+            response = await SendAsync(current, budget, cancellationToken).ConfigureAwait(false);
             attempts++;
             retried = true;
         }
@@ -202,6 +214,7 @@ public sealed record NimClient(
 
     /// <summary>Issues one chat completion call, bounded by the deadline its shape calls for.</summary>
     /// <param name="request">The request to send.</param>
+    /// <param name="maxAttempts">The attempt budget this call may spend on a dropped connection.</param>
     /// <param name="cancellationToken">Abandons the call when the client disconnects.</param>
     /// <returns>The upstream response, with headers received.</returns>
     /// <remarks>
@@ -209,7 +222,10 @@ public sealed record NimClient(
     /// completes for a streamed response as well as a plain one. It says nothing about how long a
     /// streamed body then takes to finish, which <see cref="NimStreamTranslator"/> bounds instead.
     /// </remarks>
-    private async ValueTask<HttpResponseMessage> SendAsync(NimChatRequest request, CancellationToken cancellationToken)
+    private async ValueTask<HttpResponseMessage> SendAsync(
+        NimChatRequest request,
+        int maxAttempts,
+        CancellationToken cancellationToken)
     {
         var budget = Budget(request);
 
@@ -226,10 +242,10 @@ public sealed record NimClient(
                 NvidiaLog.UpstreamDeadlineExpired(Logger, request.Model, budget.TotalSeconds, request.Stream, error);
                 throw;
             }
-            catch (Exception error) when (IsRetryableTransport(error, cancellationToken) && attempt < Retries.MaxAttempts)
+            catch (Exception error) when (IsRetryableTransport(error, cancellationToken) && attempt < maxAttempts)
             {
                 var delay = RetrySchedule.Delay(attempt, Retries, retryAfter: null, Time.GetUtcNow());
-                NvidiaLog.RetryingAfterTransportFailure(Logger, request.Model, attempt, Retries.MaxAttempts, delay.TotalMilliseconds, error);
+                NvidiaLog.RetryingAfterTransportFailure(Logger, request.Model, attempt, maxAttempts, delay.TotalMilliseconds, error);
                 await Task.Delay(delay, Time, cancellationToken).ConfigureAwait(false);
             }
         }
