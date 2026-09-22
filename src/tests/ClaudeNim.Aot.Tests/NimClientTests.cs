@@ -286,8 +286,9 @@ public sealed class NimClientTests
         _ = await Assert.That(async () => await client.SendChatAsync(StreamedRequest, CancellationToken.None))
             .Throws<TaskCanceledException>();
 
-        var expired = Warnings(logger).Find(static entry => entry.Message.Contains("did not answer within", StringComparison.Ordinal));
+        var expired = Warnings(logger).Find(static entry => entry.Message.Contains("did not answer", StringComparison.Ordinal));
         await Assert.That(expired.Message).IsNotNull();
+        await Assert.That(expired.Message).Contains(StreamedRequest.Model);
     }
 
     /// <summary>A caller that has gone away is not retried for.</summary>
@@ -325,6 +326,7 @@ public sealed class NimClientTests
         var exhausted = Warnings(logger).Find(static entry => entry.Message.Contains("giving up", StringComparison.Ordinal));
         await Assert.That(exhausted.Message).IsNotNull();
         await Assert.That(exhausted.Message).Contains("503");
+        await Assert.That(exhausted.Message).Contains(RequestWithReasoning.Model);
     }
 
     /// <summary>Each waited-out attempt is reported at a level an operator runs at.</summary>
@@ -340,6 +342,7 @@ public sealed class NimClientTests
 
         var retrying = Warnings(logger).FindAll(static entry => entry.Message.Contains("retrying in", StringComparison.Ordinal));
         await Assert.That(retrying.Count).IsGreaterThan(0);
+        await Assert.That(retrying[0].Message).Contains(RequestWithReasoning.Model);
     }
 
     /// <summary>Collects the entries that survive an operator running at warning level.</summary>

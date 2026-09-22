@@ -84,6 +84,7 @@ public sealed record NimClient(
             var delay = RetrySchedule.Delay(attempt, Retries, response.Headers.RetryAfter, Time.GetUtcNow());
             NvidiaLog.RetryingAfterTransientFailure(
                 Logger,
+                current.Model,
                 (int)response.StatusCode,
                 attempt,
                 Retries.MaxAttempts,
@@ -100,7 +101,7 @@ public sealed record NimClient(
         // already reported by the caller, and repeating it here would double every rejection.
         if (retried && !response.IsSuccessStatusCode)
         {
-            NvidiaLog.RetriesExhausted(Logger, (int)response.StatusCode, attempts);
+            NvidiaLog.RetriesExhausted(Logger, current.Model, (int)response.StatusCode, attempts);
         }
 
         return response;
@@ -222,13 +223,13 @@ public sealed record NimClient(
             }
             catch (Exception error) when (ExpiredDeadline(timeout, cancellationToken))
             {
-                NvidiaLog.UpstreamDeadlineExpired(Logger, budget.TotalSeconds, request.Stream, error);
+                NvidiaLog.UpstreamDeadlineExpired(Logger, request.Model, budget.TotalSeconds, request.Stream, error);
                 throw;
             }
             catch (Exception error) when (IsRetryableTransport(error, cancellationToken) && attempt < Retries.MaxAttempts)
             {
                 var delay = RetrySchedule.Delay(attempt, Retries, retryAfter: null, Time.GetUtcNow());
-                NvidiaLog.RetryingAfterTransportFailure(Logger, attempt, Retries.MaxAttempts, delay.TotalMilliseconds, error);
+                NvidiaLog.RetryingAfterTransportFailure(Logger, request.Model, attempt, Retries.MaxAttempts, delay.TotalMilliseconds, error);
                 await Task.Delay(delay, Time, cancellationToken).ConfigureAwait(false);
             }
         }

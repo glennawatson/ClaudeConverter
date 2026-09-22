@@ -29,8 +29,14 @@ internal static partial class NvidiaLog
         Message = "NIM rejected {Model} with the reasoning controls set; retrying without them.")]
     internal static partial void ChatTemplateRejected(ILogger logger, string model);
 
+    // Every line below names the NIM model the turn was sent to. A degraded turn is almost always
+    // a property of one model rather than of the proxy -- one tier saturates while another
+    // answers, and which one it is decides whether the fix is a routing change or patience. The
+    // model is not otherwise recoverable from these lines: the turn that named it is several
+    // entries back in an interleaved log, and under concurrency it may not be the nearest one.
     /// <summary>Records that a transient upstream failure is being waited out.</summary>
     /// <param name="logger">The log to write to.</param>
+    /// <param name="model">The NIM model the turn was sent to.</param>
     /// <param name="status">The status the upstream returned.</param>
     /// <param name="attempt">The attempt that failed.</param>
     /// <param name="maxAttempts">The configured attempt budget.</param>
@@ -38,9 +44,10 @@ internal static partial class NvidiaLog
     [LoggerMessage(
         EventId = 1008,
         Level = LogLevel.Warning,
-        Message = "NIM returned {Status} on attempt {Attempt} of {MaxAttempts}; retrying in {DelayMilliseconds}ms.")]
+        Message = "NIM returned {Status} for {Model} on attempt {Attempt} of {MaxAttempts}; retrying in {DelayMilliseconds}ms.")]
     internal static partial void RetryingAfterTransientFailure(
         ILogger logger,
+        string model,
         int status,
         int attempt,
         int maxAttempts,
@@ -48,6 +55,7 @@ internal static partial class NvidiaLog
 
     /// <summary>Records that an attempt which never reached a status is being made again.</summary>
     /// <param name="logger">The log to write to.</param>
+    /// <param name="model">The NIM model the turn was sent to.</param>
     /// <param name="attempt">The attempt that failed.</param>
     /// <param name="maxAttempts">The configured attempt budget.</param>
     /// <param name="delayMilliseconds">How long the next attempt waits.</param>
@@ -55,9 +63,10 @@ internal static partial class NvidiaLog
     [LoggerMessage(
         EventId = 1022,
         Level = LogLevel.Warning,
-        Message = "The upstream call failed before any status on attempt {Attempt} of {MaxAttempts}; retrying in {DelayMilliseconds}ms.")]
+        Message = "The upstream call for {Model} failed before any status on attempt {Attempt} of {MaxAttempts}; retrying in {DelayMilliseconds}ms.")]
     internal static partial void RetryingAfterTransportFailure(
         ILogger logger,
+        string model,
         int attempt,
         int maxAttempts,
         double delayMilliseconds,
@@ -65,6 +74,7 @@ internal static partial class NvidiaLog
 
     /// <summary>Records that the upstream did not answer inside the time the call was given.</summary>
     /// <param name="logger">The log to write to.</param>
+    /// <param name="model">The NIM model the turn was sent to.</param>
     /// <param name="budgetSeconds">The deadline the call was bounded by.</param>
     /// <param name="streaming">Whether the call asked for a streamed answer.</param>
     /// <param name="error">The cancellation the deadline surfaced as.</param>
@@ -77,15 +87,17 @@ internal static partial class NvidiaLog
     [LoggerMessage(
         EventId = 1026,
         Level = LogLevel.Warning,
-        Message = "NIM did not answer within {BudgetSeconds}s (streaming: {Streaming}); the turn was given up on rather than asked again.")]
+        Message = "NIM did not answer for {Model} within {BudgetSeconds}s (streaming: {Streaming}); the turn was given up on rather than asked again.")]
     internal static partial void UpstreamDeadlineExpired(
         ILogger logger,
+        string model,
         double budgetSeconds,
         bool streaming,
         Exception error);
 
     /// <summary>Records that a streamed turn is being asked for again, having produced nothing.</summary>
     /// <param name="logger">The log to write to.</param>
+    /// <param name="model">The NIM model the turn was sent to.</param>
     /// <param name="attempt">The attempt that failed.</param>
     /// <param name="maxAttempts">The configured attempt budget.</param>
     /// <remarks>
@@ -96,20 +108,22 @@ internal static partial class NvidiaLog
     [LoggerMessage(
         EventId = 1023,
         Level = LogLevel.Warning,
-        Message = "A streamed turn failed before producing anything on attempt {Attempt} of {MaxAttempts}; asking again.")]
-    internal static partial void RetryingStreamBeforeOutput(ILogger logger, int attempt, int maxAttempts);
+        Message = "A streamed turn on {Model} failed before producing anything on attempt {Attempt} of {MaxAttempts}; asking again.")]
+    internal static partial void RetryingStreamBeforeOutput(ILogger logger, string model, int attempt, int maxAttempts);
 
     /// <summary>Records that every attempt at a streamed turn failed before producing anything.</summary>
     /// <param name="logger">The log to write to.</param>
+    /// <param name="model">The NIM model the turn was sent to.</param>
     /// <param name="attempts">How many attempts were made.</param>
     [LoggerMessage(
         EventId = 1024,
         Level = LogLevel.Warning,
-        Message = "A streamed turn produced nothing across {Attempts} attempts; the failure was reported to the client.")]
-    internal static partial void StreamRetriesExhausted(ILogger logger, int attempts);
+        Message = "A streamed turn on {Model} produced nothing across {Attempts} attempts; the failure was reported to the client.")]
+    internal static partial void StreamRetriesExhausted(ILogger logger, string model, int attempts);
 
     /// <summary>Records that the retry budget ran out with the upstream still failing.</summary>
     /// <param name="logger">The log to write to.</param>
+    /// <param name="model">The NIM model the turn was sent to.</param>
     /// <param name="status">The status the last attempt returned.</param>
     /// <param name="attempts">How many attempts were made.</param>
     /// <remarks>
@@ -120,8 +134,8 @@ internal static partial class NvidiaLog
     [LoggerMessage(
         EventId = 1015,
         Level = LogLevel.Warning,
-        Message = "NIM still returned {Status} after {Attempts} attempts; giving up on the turn.")]
-    internal static partial void RetriesExhausted(ILogger logger, int status, int attempts);
+        Message = "NIM still returned {Status} for {Model} after {Attempts} attempts; giving up on the turn.")]
+    internal static partial void RetriesExhausted(ILogger logger, string model, int status, int attempts);
 
     /// <summary>Records that the upstream model listing returned a failure status.</summary>
     /// <param name="logger">The log to write to.</param>

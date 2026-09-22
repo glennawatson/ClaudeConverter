@@ -321,11 +321,11 @@ public static class MessagesEndpointExtensions
                 if (attempt >= services.Retries.MaxAttempts)
                 {
                     await translator.WriteHeldFailureAsync(cancellationToken).ConfigureAwait(false);
-                    NvidiaLog.StreamRetriesExhausted(services.Logger, attempt);
+                    NvidiaLog.StreamRetriesExhausted(services.Logger, turn.Resolved.NimModel, attempt);
                     return null;
                 }
 
-                NvidiaLog.RetryingStreamBeforeOutput(services.Logger, attempt, services.Retries.MaxAttempts);
+                NvidiaLog.RetryingStreamBeforeOutput(services.Logger, turn.Resolved.NimModel, attempt, services.Retries.MaxAttempts);
 
                 if (owned)
                 {
