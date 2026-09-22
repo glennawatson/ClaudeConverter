@@ -35,6 +35,9 @@ public sealed class RetryScheduleTests
     /// <summary>The factor each successive delay is expected to grow by.</summary>
     private const int ExpectedGrowthFactor = 2;
 
+    /// <summary>The share of a window a jittered delay is never shorter than.</summary>
+    private const double JitterFloorDivisor = 2.0;
+
     /// <summary>How long an excessive Retry-After instruction asks the fixture to wait.</summary>
     private const int ExcessiveRetryAfterMinutes = 10;
 
@@ -105,10 +108,15 @@ public sealed class RetryScheduleTests
         await Assert.That(delay).IsEqualTo(NarrowCeilingMilliseconds);
     }
 
-    /// <summary>Jitter keeps the delay inside the window rather than always at its edge.</summary>
-    /// <returns>A task that completes when the assertion has run.</returns>
+    /// <summary>Jitter keeps the delay inside the upper half of the window rather than always at its edge.</summary>
+    /// <returns>A task that completes when the assertions have run.</returns>
+    /// <remarks>
+    /// The floor is the part that matters. Full jitter would let the first retry come back in a
+    /// few milliseconds, which against a saturated endpoint is the same burst repeated and spends
+    /// a budget meant to span seconds before the upstream has had a chance to recover.
+    /// </remarks>
     [Test]
-    public async Task JitterStaysWithinTheWindow()
+    public async Task JitterStaysWithinTheUpperHalfOfTheWindow()
     {
         var options = new RetryOptions(
             BaseDelayMilliseconds: BaseDelayMilliseconds,
@@ -116,7 +124,7 @@ public sealed class RetryScheduleTests
 
         var delay = RetrySchedule.Delay(FirstAttempt, options, null, Now);
 
-        await Assert.That(delay.TotalMilliseconds).IsGreaterThanOrEqualTo(0);
+        await Assert.That(delay.TotalMilliseconds).IsGreaterThanOrEqualTo(BaseDelayMilliseconds / JitterFloorDivisor);
         await Assert.That(delay.TotalMilliseconds).IsLessThanOrEqualTo(BaseDelayMilliseconds);
     }
 

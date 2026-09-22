@@ -332,6 +332,12 @@ public static class MessagesEndpointExtensions
                     current.Dispose();
                 }
 
+                // What ends a streamed turn before it produces anything is almost always the
+                // upstream reporting saturation inside an otherwise successful response, and
+                // asking again in the same instant is the one reply guaranteed not to help.
+                var backoff = RetrySchedule.Delay(attempt, services.Retries, retryAfter: null, services.Time.GetUtcNow());
+                await Task.Delay(backoff, services.Time, cancellationToken).ConfigureAwait(false);
+
                 current = await services.Client.SendChatAsync(turn.UpstreamRequest, cancellationToken).ConfigureAwait(false);
                 owned = true;
 

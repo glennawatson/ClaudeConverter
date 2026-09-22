@@ -18,6 +18,7 @@ namespace ClaudeNim.Aot.Endpoints;
 /// <param name="Catalog">The sizing the advertised listing is built from, which also bounds a turn.</param>
 /// <param name="Optimizations">The switches for the local fast paths.</param>
 /// <param name="Timeouts">The configured upstream timeouts.</param>
+/// <param name="Time">The clock a re-issued streamed turn's backoff is measured against.</param>
 /// <param name="Logger">The diagnostic log.</param>
 /// <remarks>
 /// The handler takes this one parameter rather than six. A minimal API endpoint's signature is
@@ -33,4 +34,5 @@ public sealed record MessageServices(
     ModelCatalogOptions Catalog,
     OptimizationOptions Optimizations,
     HttpTimeoutOptions Timeouts,
+    TimeProvider Time,
     ILogger<MessageServices> Logger);

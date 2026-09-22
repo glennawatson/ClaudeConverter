@@ -18,10 +18,18 @@ namespace ClaudeNim.Aot.Configuration;
 /// on the same schedule and return together, reproducing the burst that caused the rejection.
 /// Spreading each delay randomly across its window breaks that up, which is why it defaults on.
 /// </para>
+/// <para>
+/// The budget is sized for what it is actually spent on. What NVIDIA's shared endpoints return
+/// under load is a plain <c>503 Service temporarily overloaded</c> or a <c>429</c>, and neither
+/// clears inside a second — so three attempts spread over about two seconds was not patience, it
+/// was three ways of asking during the same bad moment and then failing the turn. Five attempts on
+/// a doubling delay spend around fifteen seconds before giving up, which is shorter than the turn
+/// the client is waiting on and long enough for a saturation spike to pass.
+/// </para>
 /// </remarks>
 [System.Diagnostics.DebuggerDisplay("RetryOptions: {ToString(),nq}")]
 public sealed record RetryOptions(
-    int MaxAttempts = 3,
+    int MaxAttempts = 5,
     int BaseDelayMilliseconds = 1_000,
     int MaxDelayMilliseconds = 30_000,
     bool UseJitter = true)

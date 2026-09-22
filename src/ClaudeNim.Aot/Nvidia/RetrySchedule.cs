@@ -16,16 +16,22 @@ namespace ClaudeNim.Aot.Nvidia;
 /// not need.
 /// </para>
 /// <para>
-/// The delay is exponential with full jitter: attempt <c>n</c> waits a random interval between
-/// zero and <c>base × 2ⁿ</c>, clamped to the configured ceiling. Full jitter rather than a fixed
-/// backoff because the failure being retried is usually congestion, and a fixed schedule returns
-/// every waiting caller at the same instant.
+/// The delay is exponential with equal jitter: attempt <c>n</c> waits half of <c>base × 2ⁿ</c>
+/// plus a random share of the other half, clamped to the configured ceiling. Jittered rather than
+/// fixed because the failure being retried is usually congestion, and a fixed schedule returns
+/// every waiting caller at the same instant. Half the window is waited unconditionally because
+/// full jitter has no floor: it will happily come back in twenty milliseconds, which against a
+/// saturated endpoint is not a second chance but the same burst repeated, and it collapses a
+/// budget meant to span seconds into one that is spent before the upstream has recovered.
 /// </para>
 /// </remarks>
 public static class RetrySchedule
 {
     /// <summary>The factor each successive delay window is multiplied by.</summary>
     private const double BackoffFactor = 2.0;
+
+    /// <summary>How many equal parts a delay window is split into: one waited, one jittered.</summary>
+    private const double WindowParts = 2.0;
 
     /// <summary>The statuses worth sending the same request again for.</summary>
     /// <remarks>
@@ -90,9 +96,9 @@ public static class RetrySchedule
         return TimeSpan.FromMilliseconds(options.UseJitter ? Spread(window) : window);
     }
 
-    /// <summary>Picks a point at random inside a delay window.</summary>
+    /// <summary>Picks a point at random inside the upper half of a delay window.</summary>
     /// <param name="window">The width of the window, in milliseconds.</param>
-    /// <returns>The chosen delay, in milliseconds.</returns>
+    /// <returns>The chosen delay, in milliseconds, which is never less than half the window.</returns>
     /// <remarks>
     /// This is scheduling, not secrecy. The only property required of the number is that two
     /// callers rarely pick the same one, which a cryptographic generator would deliver at a cost
@@ -102,7 +108,11 @@ public static class RetrySchedule
         "Security",
         "CA5394:Do not use insecure randomness",
         Justification = "Jitter spreads retry timing; it is not used for anything security-sensitive.")]
-    private static double Spread(double window) => Random.Shared.NextDouble() * window;
+    private static double Spread(double window)
+    {
+        var half = window / WindowParts;
+        return half + (Random.Shared.NextDouble() * half);
+    }
 
     /// <summary>Reads the delay an upstream asked for.</summary>
     /// <param name="retryAfter">The header the upstream sent, which may be absent.</param>

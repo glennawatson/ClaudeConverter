@@ -41,6 +41,9 @@ public sealed class MessagesEndpointExtensionsTests
     /// <summary>The number of upstream calls one retried streamed turn takes.</summary>
     private const int CallsAfterOneStreamRetry = 2;
 
+    /// <summary>Retry settings whose backoff is short enough that a re-issued turn does not slow the suite.</summary>
+    private static readonly RetryOptions FastRetries = new(BaseDelayMilliseconds: 1, MaxDelayMilliseconds: 2, UseJitter: false);
+
     /// <summary>A request missing a model name is rejected before an upstream call is attempted.</summary>
     /// <returns>A task that completes when the assertions have run.</returns>
     [Test]
@@ -403,10 +406,11 @@ public sealed class MessagesEndpointExtensionsTests
             client,
             new RequestGate(new RateLimitOptions(RequestsPerWindow: 0, MaxConcurrency: 0)),
             new NvidiaNimOptions(),
-            new RetryOptions(),
+            FastRetries,
             new ModelCatalogOptions(),
             new OptimizationOptions(),
             new HttpTimeoutOptions(),
+            TimeProvider.System,
             NullLogger<MessageServices>.Instance);
 
     /// <summary>Builds the services a turn is served from, wired to a fake upstream client and a capturing logger.</summary>
@@ -420,10 +424,11 @@ public sealed class MessagesEndpointExtensionsTests
             client,
             new RequestGate(new RateLimitOptions(RequestsPerWindow: 0, MaxConcurrency: 0)),
             new NvidiaNimOptions(),
-            new RetryOptions(),
+            FastRetries,
             new ModelCatalogOptions(),
             new OptimizationOptions(),
             new HttpTimeoutOptions(),
+            TimeProvider.System,
             logger);
 
     /// <summary>Builds a JSON-bodied response for a completed upstream call.</summary>
