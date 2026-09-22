@@ -16,6 +16,9 @@ public sealed class NimStreamTranslatorTests
     /// <summary>The prompt size fed to every translation.</summary>
     private const int InputTokens = 5;
 
+    /// <summary>The NIM model every fixture translates a turn from, which its log lines name.</summary>
+    private const string UpstreamModel = "nvidia/nemotron-3-super-120b-a12b";
+
     /// <summary>The rendered content-block payload for a recovered tool named "search".</summary>
     private const string ToolNameField = "\"name\":\"search\"";
 
@@ -280,6 +283,7 @@ public sealed class NimStreamTranslatorTests
             entry.Level >= LogLevel.Warning && entry.Message.Contains("no content at all", StringComparison.Ordinal));
 
         await Assert.That(empty.Count).IsEqualTo(1);
+        await Assert.That(empty[0].Message).Contains(UpstreamModel);
         await Assert.That(empty[0].Message).Contains("stop");
     }
 
@@ -291,7 +295,7 @@ public sealed class NimStreamTranslatorTests
         var logger = new CapturingLogger<NimStreamTranslator>();
 
         await using var output = new MemoryStream();
-        var translator = new NimStreamTranslator(new AnthropicSseWriter(output), true, false, IdleTimeout, logger);
+        var translator = new NimStreamTranslator(new AnthropicSseWriter(output), UpstreamModel, true, false, IdleTimeout, logger);
 
         await using var upstream = new MemoryStream(Encoding.UTF8.GetBytes(upstreamSse));
         await translator.TranslateAsync(upstream, "msg_1", "claude-sonnet-5", InputTokens, CancellationToken.None);
@@ -313,6 +317,7 @@ public sealed class NimStreamTranslatorTests
         var writer = new AnthropicSseWriter(output);
         var translator = new NimStreamTranslator(
             writer,
+            UpstreamModel,
             thinkingEnabled,
             reasoningMayBeSeeded,
             IdleTimeout,

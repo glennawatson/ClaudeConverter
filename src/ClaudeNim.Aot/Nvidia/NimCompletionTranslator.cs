@@ -29,6 +29,7 @@ public static class NimCompletionTranslator
     /// <param name="completion">The upstream completion, which may be absent.</param>
     /// <param name="messageId">The identifier to report for the Anthropic message.</param>
     /// <param name="model">The model identifier to echo back to the client.</param>
+    /// <param name="nimModel">The NIM model that produced the completion, which the log names.</param>
     /// <param name="inputTokens">The prompt size to report when the upstream withheld usage.</param>
     /// <param name="thinkingEnabled">Whether reasoning should be forwarded to the client.</param>
     /// <param name="logger">The diagnostic log.</param>
@@ -37,12 +38,13 @@ public static class NimCompletionTranslator
         NimChatCompletion? completion,
         string messageId,
         string model,
+        string nimModel,
         int inputTokens,
         bool thinkingEnabled,
         ILogger logger)
     {
         var choice = FirstChoice(completion);
-        var blocks = ComposeBlocks(choice?.Message, thinkingEnabled, logger);
+        var blocks = ComposeBlocks(choice?.Message, nimModel, thinkingEnabled, logger);
         var usage = completion?.Usage;
 
         return new(
@@ -57,15 +59,20 @@ public static class NimCompletionTranslator
 
     /// <summary>Composes the content blocks a completed upstream message translates into.</summary>
     /// <param name="message">The completed message, which may be absent.</param>
+    /// <param name="nimModel">The NIM model that produced the completion.</param>
     /// <param name="thinkingEnabled">Whether reasoning should be forwarded to the client.</param>
     /// <param name="logger">The diagnostic log.</param>
     /// <returns>The composed blocks, never empty.</returns>
-    private static List<ContentBlock> ComposeBlocks(NimChatMessage? message, bool thinkingEnabled, ILogger logger)
+    private static List<ContentBlock> ComposeBlocks(
+        NimChatMessage? message,
+        string nimModel,
+        bool thinkingEnabled,
+        ILogger logger)
     {
         var blocks = new List<ContentBlock>();
 
         AppendReasoning(blocks, message?.ReasoningContent, thinkingEnabled);
-        AppendContent(blocks, message?.Content?.Text, thinkingEnabled, logger);
+        AppendContent(blocks, message?.Content?.Text, nimModel, thinkingEnabled, logger);
         AppendToolCalls(blocks, message?.ToolCalls);
 
         if (blocks.Count == 0)
@@ -97,9 +104,15 @@ public static class NimCompletionTranslator
     /// <summary>Appends the answer text, separating any reasoning wrapped inside it.</summary>
     /// <param name="blocks">The blocks being composed.</param>
     /// <param name="content">The answer text, which may be absent.</param>
+    /// <param name="nimModel">The NIM model that produced the completion.</param>
     /// <param name="thinkingEnabled">Whether reasoning should be forwarded to the client.</param>
     /// <param name="logger">The diagnostic log.</param>
-    private static void AppendContent(List<ContentBlock> blocks, string? content, bool thinkingEnabled, ILogger logger)
+    private static void AppendContent(
+        List<ContentBlock> blocks,
+        string? content,
+        string nimModel,
+        bool thinkingEnabled,
+        ILogger logger)
     {
         if (content is not { Length: > 0 } text)
         {
@@ -113,19 +126,20 @@ public static class NimCompletionTranslator
 
         for (var i = 0; i < segments.Count; i++)
         {
-            AppendSegment(blocks, segments[i], thinkingEnabled, logger);
+            AppendSegment(blocks, segments[i], nimModel, thinkingEnabled, logger);
         }
     }
 
     /// <summary>Appends a run of answer text, recovering any tool call written into it.</summary>
     /// <param name="blocks">The blocks being composed.</param>
     /// <param name="text">The answer text.</param>
+    /// <param name="nimModel">The NIM model that wrote the call into its answer.</param>
     /// <param name="logger">The diagnostic log.</param>
     /// <remarks>
     /// Models that render a tool call as marker tokens inside their answer would otherwise have
     /// the whole call shown to the client as literal text and never executed.
     /// </remarks>
-    private static void AppendText(List<ContentBlock> blocks, string text, ILogger logger)
+    private static void AppendText(List<ContentBlock> blocks, string text, string nimModel, ILogger logger)
     {
         var runs = new List<EmbeddedToolCall>();
         var parser = new EmbeddedToolCallParser();
@@ -141,7 +155,7 @@ public static class NimCompletionTranslator
                 continue;
             }
 
-            NvidiaLog.EmbeddedToolCallRecovered(logger, run.Name);
+            NvidiaLog.EmbeddedToolCallRecovered(logger, nimModel, run.Name);
 
             blocks.Add(new(
                 ContentBlockTypes.ToolUse,
@@ -154,17 +168,19 @@ public static class NimCompletionTranslator
     /// <summary>Appends one classified run of output onto the block it belongs to.</summary>
     /// <param name="blocks">The blocks being composed.</param>
     /// <param name="segment">The run to append.</param>
+    /// <param name="nimModel">The NIM model that produced the completion.</param>
     /// <param name="thinkingEnabled">Whether reasoning should be forwarded to the client.</param>
     /// <param name="logger">The diagnostic log.</param>
     private static void AppendSegment(
         List<ContentBlock> blocks,
         ThinkTagSegment segment,
+        string nimModel,
         bool thinkingEnabled,
         ILogger logger)
     {
         if (!segment.IsThinking)
         {
-            AppendText(blocks, segment.Text, logger);
+            AppendText(blocks, segment.Text, nimModel, logger);
             return;
         }
 

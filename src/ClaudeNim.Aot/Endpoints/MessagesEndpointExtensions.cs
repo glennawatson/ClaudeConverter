@@ -93,14 +93,14 @@ public static class MessagesEndpointExtensions
         using var lease = await services.Gate.AcquireAsync(cancellationToken).ConfigureAwait(false);
         if (!lease.IsAcquired)
         {
-            NvidiaLog.RateLimitSaturated(services.Logger);
+            NvidiaLog.RateLimitSaturated(services.Logger, resolved.NimModel);
             return AnthropicErrors.Result(
                 StatusCodes.Status429TooManyRequests,
                 "The proxy's own rate limit is saturated; retry shortly.");
         }
 
         NvidiaLog.SendingTurn(services.Logger, request.Model, resolved.NimModel, request.IsStreaming);
-        LogUpstreamRequestBody(services.Logger, upstreamRequest);
+        LogUpstreamRequestBody(services.Logger, resolved.NimModel, upstreamRequest);
 
         // Measured around the whole call, retries and downgrades included, so the elapsed time is
         // what the client actually waited rather than what the last attempt took.
@@ -113,7 +113,7 @@ public static class MessagesEndpointExtensions
         }
         catch (Exception error) when (IsUpstreamTransportFailure(error) && !cancellationToken.IsCancellationRequested)
         {
-            NvidiaLog.LogUpstreamTransportFailure(services.Logger, error);
+            NvidiaLog.LogUpstreamTransportFailure(services.Logger, resolved.NimModel, error);
             return AnthropicErrors.Result(
                 StatusCodes.Status503ServiceUnavailable,
                 "The upstream connection failed or timed out before a response arrived.");
@@ -145,7 +145,7 @@ public static class MessagesEndpointExtensions
     {
         if (!response.IsSuccessStatusCode)
         {
-            return await UpstreamFailureAsync(response, services.Logger, cancellationToken).ConfigureAwait(false);
+            return await UpstreamFailureAsync(response, turn.Resolved.NimModel, services.Logger, cancellationToken).ConfigureAwait(false);
         }
 
         return turn.Request.IsStreaming
@@ -155,13 +155,14 @@ public static class MessagesEndpointExtensions
 
     /// <summary>Logs the exact request sent upstream, when debug logging is enabled.</summary>
     /// <param name="logger">The diagnostic log.</param>
+    /// <param name="nimModel">The NIM model the request is bound for.</param>
     /// <param name="upstreamRequest">The request about to be sent.</param>
     /// <remarks>
     /// Serializing a tool-bearing request is not free, so the check comes first rather than relying
     /// on the generated log method's own internal one -- that still evaluates this argument eagerly
     /// before the call, since it is a plain string parameter.
     /// </remarks>
-    private static void LogUpstreamRequestBody(ILogger logger, NimChatRequest upstreamRequest)
+    private static void LogUpstreamRequestBody(ILogger logger, string nimModel, NimChatRequest upstreamRequest)
     {
         if (!logger.IsEnabled(LogLevel.Debug))
         {
@@ -169,7 +170,7 @@ public static class MessagesEndpointExtensions
         }
 
         var body = JsonSerializer.Serialize(upstreamRequest, ProxyJsonContext.Default.NimChatRequest);
-        NvidiaLog.UpstreamRequestBody(logger, body);
+        NvidiaLog.UpstreamRequestBody(logger, nimModel, body);
     }
 
     /// <summary>Determines whether an exception represents a failed or timed-out upstream connection.</summary>
@@ -382,6 +383,7 @@ public static class MessagesEndpointExtensions
 
         return new(
             writer,
+            resolved.NimModel,
             resolved.ThinkingEnabled,
             seeded,
             TimeSpan.FromSeconds(services.Timeouts.StreamIdleSeconds),
@@ -412,7 +414,7 @@ public static class MessagesEndpointExtensions
         catch (Exception error) when (IsUpstreamTransportFailure(error) && !cancellationToken.IsCancellationRequested)
         {
             // Nothing has been written yet, so this is still recoverable by asking again.
-            NvidiaLog.LogUpstreamTransportFailure(services.Logger, error);
+            NvidiaLog.LogUpstreamTransportFailure(services.Logger, turn.Resolved.NimModel, error);
             return StreamTurnOutcome.FailedBeforeOutput;
         }
 
@@ -447,6 +449,7 @@ public static class MessagesEndpointExtensions
 
     /// <summary>Reads a non-streamed body, recording it before it is parsed.</summary>
     /// <param name="response">The upstream response.</param>
+    /// <param name="nimModel">The NIM model that answered.</param>
     /// <param name="logger">The diagnostic log.</param>
     /// <param name="cancellationToken">Abandons the read when the client disconnects.</param>
     /// <returns>The parsed completion.</returns>
@@ -457,11 +460,12 @@ public static class MessagesEndpointExtensions
     /// </remarks>
     private static async Task<NimChatCompletion?> ReadLoggedCompletionAsync(
         HttpResponseMessage response,
+        string nimModel,
         ILogger logger,
         CancellationToken cancellationToken)
     {
         var body = await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
-        NvidiaLog.UpstreamResponseBody(logger, body);
+        NvidiaLog.UpstreamResponseBody(logger, nimModel, body);
 
         return JsonSerializer.Deserialize(body, ProxyJsonContext.Default.NimChatCompletion);
     }
@@ -503,14 +507,14 @@ public static class MessagesEndpointExtensions
         try
         {
             completion = services.Logger.IsEnabled(LogLevel.Debug)
-                ? await ReadLoggedCompletionAsync(response, services.Logger, bodyTimeout.Token).ConfigureAwait(false)
+                ? await ReadLoggedCompletionAsync(response, turn.Resolved.NimModel, services.Logger, bodyTimeout.Token).ConfigureAwait(false)
                 : await response.Content
                     .ReadFromJsonAsync(ProxyJsonContext.Default.NimChatCompletion, bodyTimeout.Token)
                     .ConfigureAwait(false);
         }
         catch (Exception error) when (IsUpstreamTransportFailure(error) && !cancellationToken.IsCancellationRequested)
         {
-            NvidiaLog.LogUpstreamTransportFailure(services.Logger, error);
+            NvidiaLog.LogUpstreamTransportFailure(services.Logger, turn.Resolved.NimModel, error);
             return AnthropicErrors.Result(
                 StatusCodes.Status503ServiceUnavailable,
                 "The upstream connection failed or timed out before the response body finished.");
@@ -520,6 +524,7 @@ public static class MessagesEndpointExtensions
             completion,
             turn.MessageId,
             request.Model,
+            turn.Resolved.NimModel,
             TokenEstimator.Estimate(request.Messages, request.System, request.Tools),
             turn.Resolved.ThinkingEnabled,
             services.Logger);
@@ -529,6 +534,7 @@ public static class MessagesEndpointExtensions
 
     /// <summary>Turns a failed upstream response into an Anthropic error.</summary>
     /// <param name="response">The failed upstream response.</param>
+    /// <param name="nimModel">The NIM model that rejected the turn.</param>
     /// <param name="logger">The diagnostic log.</param>
     /// <param name="cancellationToken">Abandons the read when the client disconnects.</param>
     /// <returns>The error result.</returns>
@@ -539,6 +545,7 @@ public static class MessagesEndpointExtensions
     /// </remarks>
     private static async Task<IResult?> UpstreamFailureAsync(
         HttpResponseMessage response,
+        string nimModel,
         ILogger logger,
         CancellationToken cancellationToken)
     {
@@ -553,12 +560,12 @@ public static class MessagesEndpointExtensions
         }
         catch (Exception error) when (IsUpstreamTransportFailure(error) && !cancellationToken.IsCancellationRequested)
         {
-            NvidiaLog.TurnRejectedByUpstream(logger, upstreamStatus, fallback);
+            NvidiaLog.TurnRejectedByUpstream(logger, nimModel, upstreamStatus, fallback);
             return AnthropicErrors.Result(status, Describe(upstreamStatus, fallback));
         }
 
         var detail = body.Length > 0 ? body : fallback;
-        NvidiaLog.TurnRejectedByUpstream(logger, upstreamStatus, Truncated(detail));
+        NvidiaLog.TurnRejectedByUpstream(logger, nimModel, upstreamStatus, Truncated(detail));
         return AnthropicErrors.Result(status, Describe(upstreamStatus, detail));
     }
 

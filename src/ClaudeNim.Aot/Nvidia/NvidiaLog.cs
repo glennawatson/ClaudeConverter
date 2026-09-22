@@ -166,6 +166,7 @@ internal static partial class NvidiaLog
 
     /// <summary>Records a streamed chunk that could not be read.</summary>
     /// <param name="logger">The log to write to.</param>
+    /// <param name="model">The NIM model the turn was sent to.</param>
     /// <param name="payload">The payload that could not be read.</param>
     /// <param name="error">The failure the reader raised.</param>
     /// <remarks>
@@ -175,11 +176,12 @@ internal static partial class NvidiaLog
     [LoggerMessage(
         EventId = 1005,
         Level = LogLevel.Debug,
-        Message = "Skipped an unreadable NIM stream chunk: {Payload}")]
-    internal static partial void StreamChunkUnreadable(ILogger logger, string payload, Exception error);
+        Message = "Skipped an unreadable stream chunk from {Model}: {Payload}")]
+    internal static partial void StreamChunkUnreadable(ILogger logger, string model, string payload, Exception error);
 
     /// <summary>Records the first unreadable chunk of a turn, where the rest are only recorded at debug.</summary>
     /// <param name="logger">The log to write to.</param>
+    /// <param name="model">The NIM model the turn was sent to.</param>
     /// <param name="payload">The payload that could not be read.</param>
     /// <param name="error">The failure the reader raised.</param>
     /// <remarks>
@@ -190,11 +192,12 @@ internal static partial class NvidiaLog
     [LoggerMessage(
         EventId = 1016,
         Level = LogLevel.Warning,
-        Message = "A NIM stream chunk could not be read and was skipped; further ones this turn are logged at debug. First: {Payload}")]
-    internal static partial void StreamChunkUnreadableFirst(ILogger logger, string payload, Exception error);
+        Message = "A stream chunk from {Model} could not be read and was skipped; further ones this turn are logged at debug. First: {Payload}")]
+    internal static partial void StreamChunkUnreadableFirst(ILogger logger, string model, string payload, Exception error);
 
     /// <summary>Records that a streamed turn was abandoned because the upstream went quiet.</summary>
     /// <param name="logger">The log to write to.</param>
+    /// <param name="model">The NIM model the turn was sent to.</param>
     /// <param name="idleSeconds">How long the upstream produced nothing before the turn was given up on.</param>
     /// <remarks>
     /// This arrives as a cancellation, which is indistinguishable from a dropped connection by
@@ -203,11 +206,12 @@ internal static partial class NvidiaLog
     [LoggerMessage(
         EventId = 1017,
         Level = LogLevel.Warning,
-        Message = "NIM produced nothing for {IdleSeconds}s; the streamed turn was abandoned.")]
-    internal static partial void StreamIdleTimeout(ILogger logger, double idleSeconds);
+        Message = "NIM produced nothing for {Model} for {IdleSeconds}s; the streamed turn was abandoned.")]
+    internal static partial void StreamIdleTimeout(ILogger logger, string model, double idleSeconds);
 
     /// <summary>Records that a turn finished without the model having produced anything.</summary>
     /// <param name="logger">The log to write to.</param>
+    /// <param name="model">The NIM model the turn was sent to.</param>
     /// <param name="chunks">The number of chunks that were read.</param>
     /// <param name="finishReason">The reason the upstream gave for stopping.</param>
     /// <remarks>
@@ -219,11 +223,12 @@ internal static partial class NvidiaLog
     [LoggerMessage(
         EventId = 1018,
         Level = LogLevel.Warning,
-        Message = "A streamed turn produced no content at all after {Chunks} chunks (finish reason: {FinishReason}).")]
-    internal static partial void EmptyTurn(ILogger logger, int chunks, string finishReason);
+        Message = "A streamed turn on {Model} produced no content at all after {Chunks} chunks (finish reason: {FinishReason}).")]
+    internal static partial void EmptyTurn(ILogger logger, string model, int chunks, string finishReason);
 
     /// <summary>Records that the upstream ended a streamed turn with a failure.</summary>
     /// <param name="logger">The log to write to.</param>
+    /// <param name="model">The NIM model the turn was sent to.</param>
     /// <param name="reason">The failure the upstream reported.</param>
     /// <param name="upstreamCode">The status the upstream gave, or 0 when it gave none.</param>
     /// <param name="upstreamType">The upstream's own classification, or "none" when it gave none.</param>
@@ -237,9 +242,10 @@ internal static partial class NvidiaLog
     [LoggerMessage(
         EventId = 1007,
         Level = LogLevel.Warning,
-        Message = "NIM ended a streamed turn with a failure (upstream status {UpstreamCode}, type {UpstreamType}; reported to the client as {ReportedType}): {Reason}")]
+        Message = "NIM ended a streamed turn on {Model} with a failure (upstream status {UpstreamCode}, type {UpstreamType}; reported to the client as {ReportedType}): {Reason}")]
     internal static partial void StreamFailed(
         ILogger logger,
+        string model,
         string reason,
         int upstreamCode,
         string upstreamType,
@@ -247,13 +253,14 @@ internal static partial class NvidiaLog
 
     /// <summary>Records how much a streamed turn produced, once it has ended.</summary>
     /// <param name="logger">The log to write to.</param>
+    /// <param name="model">The NIM model the turn was sent to.</param>
     /// <param name="chunks">The number of chunks that were read.</param>
     /// <param name="skipped">The number of chunks that could not be read.</param>
     [LoggerMessage(
         EventId = 1006,
         Level = LogLevel.Debug,
-        Message = "NIM stream ended after {Chunks} readable chunks and {Skipped} skipped.")]
-    internal static partial void StreamCompleted(ILogger logger, int chunks, int skipped);
+        Message = "The stream from {Model} ended after {Chunks} readable chunks and {Skipped} skipped.")]
+    internal static partial void StreamCompleted(ILogger logger, string model, int chunks, int skipped);
 
     /// <summary>Records that a refresh failed and the previous listing is being served instead.</summary>
     /// <param name="logger">The log to write to.</param>
@@ -284,12 +291,13 @@ internal static partial class NvidiaLog
 
     /// <summary>Records that a Messages API turn's own upstream call failed at the transport level.</summary>
     /// <param name="logger">The log to write to.</param>
+    /// <param name="model">The NIM model the turn was sent to.</param>
     /// <param name="error">The transport failure.</param>
     [LoggerMessage(
         EventId = 1009,
         Level = LogLevel.Warning,
-        Message = "The upstream connection failed or timed out before a response arrived.")]
-    internal static partial void LogUpstreamTransportFailure(ILogger logger, Exception error);
+        Message = "The upstream connection for {Model} failed or timed out before a response arrived.")]
+    internal static partial void LogUpstreamTransportFailure(ILogger logger, string model, Exception error);
 
     /// <summary>Records that a Messages API turn is being sent upstream.</summary>
     /// <param name="logger">The log to write to.</param>
@@ -330,24 +338,27 @@ internal static partial class NvidiaLog
 
     /// <summary>Records that the upstream rejected a Messages API turn outright.</summary>
     /// <param name="logger">The log to write to.</param>
+    /// <param name="model">The NIM model the turn was sent to.</param>
     /// <param name="status">The status the upstream returned.</param>
     /// <param name="body">The upstream's own error body, truncated.</param>
     [LoggerMessage(
         EventId = 1011,
         Level = LogLevel.Warning,
-        Message = "NIM rejected a turn with status {Status}: {Body}")]
-    internal static partial void TurnRejectedByUpstream(ILogger logger, int status, string body);
+        Message = "NIM rejected a turn for {Model} with status {Status}: {Body}")]
+    internal static partial void TurnRejectedByUpstream(ILogger logger, string model, int status, string body);
 
     /// <summary>Records that the proxy's own rate limit turned away a turn before it reached NIM.</summary>
     /// <param name="logger">The log to write to.</param>
+    /// <param name="model">The NIM model the turn would have been sent to.</param>
     [LoggerMessage(
         EventId = 1012,
         Level = LogLevel.Warning,
-        Message = "The proxy's own rate limit is saturated; a turn was rejected before reaching NIM.")]
-    internal static partial void RateLimitSaturated(ILogger logger);
+        Message = "The proxy's own rate limit is saturated; a turn for {Model} was rejected before reaching NIM.")]
+    internal static partial void RateLimitSaturated(ILogger logger, string model);
 
     /// <summary>Records the exact request sent upstream, for diagnosing why a turn's content is wrong.</summary>
     /// <param name="logger">The log to write to.</param>
+    /// <param name="model">The NIM model the turn was sent to.</param>
     /// <param name="body">The serialized upstream request.</param>
     /// <remarks>
     /// The other log messages establish that a turn was sent and what came back at the transport
@@ -358,11 +369,12 @@ internal static partial class NvidiaLog
     [LoggerMessage(
         EventId = 1013,
         Level = LogLevel.Debug,
-        Message = "Upstream request body: {Body}")]
-    internal static partial void UpstreamRequestBody(ILogger logger, string body);
+        Message = "Upstream request body for {Model}: {Body}")]
+    internal static partial void UpstreamRequestBody(ILogger logger, string model, string body);
 
     /// <summary>Records a tool call the proxy lifted out of answer text rather than being handed.</summary>
     /// <param name="logger">The log to write to.</param>
+    /// <param name="model">The NIM model that wrote the call into its answer.</param>
     /// <param name="tool">The tool the recovered call names.</param>
     /// <remarks>
     /// The two ways a call reaches a client are indistinguishable once it gets there, and they
@@ -374,11 +386,12 @@ internal static partial class NvidiaLog
     [LoggerMessage(
         EventId = 1020,
         Level = LogLevel.Warning,
-        Message = "Recovered a {Tool} call from answer text; its arguments were assembled here, not parsed by NIM.")]
-    internal static partial void EmbeddedToolCallRecovered(ILogger logger, string tool);
+        Message = "Recovered a {Tool} call from {Model}'s answer text; its arguments were assembled here, not parsed by NIM.")]
+    internal static partial void EmbeddedToolCallRecovered(ILogger logger, string model, string tool);
 
     /// <summary>Records the whole body of a non-streamed upstream response.</summary>
     /// <param name="logger">The log to write to.</param>
+    /// <param name="model">The NIM model the turn was sent to.</param>
     /// <param name="body">The upstream response body.</param>
     /// <remarks>
     /// <see cref="RawStreamLine"/> does this for a streamed turn and had no counterpart here, so a
@@ -388,20 +401,23 @@ internal static partial class NvidiaLog
     [LoggerMessage(
         EventId = 1021,
         Level = LogLevel.Debug,
-        Message = "Upstream response body: {Body}")]
-    internal static partial void UpstreamResponseBody(ILogger logger, string body);
+        Message = "Upstream response body from {Model}: {Body}")]
+    internal static partial void UpstreamResponseBody(ILogger logger, string model, string body);
 
     /// <summary>Records one raw line read from a streamed upstream response.</summary>
     /// <param name="logger">The log to write to.</param>
+    /// <param name="model">The NIM model the turn was sent to.</param>
     /// <param name="line">The raw line, including lines this proxy already parses successfully.</param>
     /// <remarks>
     /// <see cref="StreamChunkUnreadable"/> only records a line once parsing has already failed;
     /// this records every line, so a turn that translates cleanly but into the wrong content can
     /// still be compared against what NIM actually sent. Debug-only for the same reason.
+    /// The model is named on every line because concurrent turns interleave here: at debug the
+    /// log is a mix of several streams, and the nearest turn line is not reliably this one's.
     /// </remarks>
     [LoggerMessage(
         EventId = 1014,
         Level = LogLevel.Debug,
-        Message = "Upstream stream line: {Line}")]
-    internal static partial void RawStreamLine(ILogger logger, string line);
+        Message = "Upstream stream line from {Model}: {Line}")]
+    internal static partial void RawStreamLine(ILogger logger, string model, string line);
 }

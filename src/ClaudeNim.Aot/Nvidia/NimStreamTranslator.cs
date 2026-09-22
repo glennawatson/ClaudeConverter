@@ -14,6 +14,7 @@ namespace ClaudeNim.Aot.Nvidia;
 
 /// <summary>Turns a streamed NVIDIA NIM completion into the Anthropic event stream.</summary>
 /// <param name="writer">The writer the Anthropic events are emitted through.</param>
+/// <param name="nimModel">The NIM model the turn was sent to, which every line this logs names.</param>
 /// <param name="thinkingEnabled">Whether reasoning should be forwarded to the client.</param>
 /// <param name="reasoningMayBeSeeded">
 /// Whether the model's chat template may open the reasoning block itself, so that the completion
@@ -31,10 +32,16 @@ namespace ClaudeNim.Aot.Nvidia;
 /// <para>
 /// One instance serves exactly one response.
 /// </para>
+/// <para>
+/// The model it names in the log is the NIM one, not the Claude name echoed back to the client: a
+/// degraded stream is a property of the model that produced it, and several Claude names route to
+/// the same one.
+/// </para>
 /// </remarks>
 [System.Diagnostics.DebuggerDisplay("NimStreamTranslator: {_thinkParser}")]
 public sealed class NimStreamTranslator(
     AnthropicSseWriter writer,
+    string nimModel,
     bool thinkingEnabled,
     bool reasoningMayBeSeeded,
     TimeSpan idleTimeout,
@@ -156,7 +163,7 @@ public sealed class NimStreamTranslator(
         }
 
         await FlushAsync(inputTokens, cancellationToken).ConfigureAwait(false);
-        NvidiaLog.StreamCompleted(logger, _chunksRead, _chunksSkipped);
+        NvidiaLog.StreamCompleted(logger, nimModel, _chunksRead, _chunksSkipped);
 
         return StreamTurnOutcome.Completed;
     }
@@ -218,7 +225,7 @@ public sealed class NimStreamTranslator(
             // the same exception a dropped connection raises. The two call for different fixes.
             if (idle.IsCancellationRequested)
             {
-                NvidiaLog.StreamIdleTimeout(logger, idleTimeout.TotalSeconds);
+                NvidiaLog.StreamIdleTimeout(logger, nimModel, idleTimeout.TotalSeconds);
             }
             else
             {
@@ -258,7 +265,7 @@ public sealed class NimStreamTranslator(
     {
         if (logger.IsEnabled(LogLevel.Debug))
         {
-            NvidiaLog.RawStreamLine(logger, line);
+            NvidiaLog.RawStreamLine(logger, nimModel, line);
         }
 
         var chunk = ParseChunk(line);
@@ -295,6 +302,7 @@ public sealed class NimStreamTranslator(
     private void LogStreamFailure(NimStreamError failure) =>
         NvidiaLog.StreamFailed(
             logger,
+            nimModel,
             failure.Message ?? string.Empty,
             failure.Code ?? 0,
             failure.Type ?? "none",
@@ -350,11 +358,11 @@ public sealed class NimStreamTranslator(
 
             if (_chunksSkipped == 1)
             {
-                NvidiaLog.StreamChunkUnreadableFirst(logger, logged, error);
+                NvidiaLog.StreamChunkUnreadableFirst(logger, nimModel, logged, error);
             }
             else if (logger.IsEnabled(LogLevel.Debug))
             {
-                NvidiaLog.StreamChunkUnreadable(logger, logged, error);
+                NvidiaLog.StreamChunkUnreadable(logger, nimModel, logged, error);
             }
 
             return null;
@@ -536,7 +544,7 @@ public sealed class NimStreamTranslator(
         await CloseTextAsync(cancellationToken).ConfigureAwait(false);
         await CloseThinkingAsync(cancellationToken).ConfigureAwait(false);
 
-        NvidiaLog.EmbeddedToolCallRecovered(logger, run.Name);
+        NvidiaLog.EmbeddedToolCallRecovered(logger, nimModel, run.Name);
 
         var index = _nextBlockIndex++;
         var identifier = $"toolu_{Guid.NewGuid():N}";
@@ -773,7 +781,7 @@ public sealed class NimStreamTranslator(
         // A turn with no content at all is not a valid Anthropic message. Reasoning models that
         if (_nextBlockIndex == 0)
         {
-            NvidiaLog.EmptyTurn(logger, _chunksRead, _finishReason ?? "none reported");
+            NvidiaLog.EmptyTurn(logger, nimModel, _chunksRead, _finishReason ?? "none reported");
             await AppendTextAsync(" ", cancellationToken).ConfigureAwait(false);
         }
 
