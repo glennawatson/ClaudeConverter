@@ -1,15 +1,17 @@
-# Claude Nim AOT
+# ClaudeConverter
 
-An Anthropic Messages API in front of NVIDIA NIM, compiled ahead of time to a single native
-binary. Point Claude Code at it and the session runs on NVIDIA's free models.
+An Anthropic Messages API compatibility layer, compiled ahead of time to a single native binary.
+Point Claude Code at it and the session runs on a different model provider underneath.
 
-It is a C# rewrite of the ideas in [cc-nim](https://github.com/diyism/cc-nim) and
+NVIDIA NIM is the first provider it speaks, and the transport is abstracted behind an interface so
+another one can be added without disturbing the Anthropic-facing side. It is a C# rewrite of the
+ideas in [cc-nim](https://github.com/diyism/cc-nim) and
 [claude-nim](https://github.com/claude-server/claude-nim), both MIT licensed.
 
 ## Scope
 
-NVIDIA NIM only. The transport is abstracted behind an interface, but this is not a multi-provider
-router and does not pretend to be one.
+NVIDIA NIM only, today. This is not a multi-provider router yet and does not pretend to be one —
+the abstraction exists so a second provider is an addition rather than a rewrite.
 
 ## Requirements
 
