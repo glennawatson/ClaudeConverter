@@ -124,26 +124,22 @@ public static class MessagesEndpointExtensions
             var elapsed = (long)Stopwatch.GetElapsedTime(started).TotalMilliseconds;
             NvidiaLog.TurnAnswered(services.Logger, resolved.NimModel, (int)response.StatusCode, elapsed);
 
-            return await DispatchAsync(response, context, request, resolved, messageId, services, cancellationToken)
-                .ConfigureAwait(false);
+            var turn = new TurnContext(request, upstreamRequest, resolved, messageId);
+            return await DispatchAsync(response, context, turn, services, cancellationToken).ConfigureAwait(false);
         }
     }
 
     /// <summary>Hands a successful upstream response to the translator its shape calls for.</summary>
     /// <param name="response">The upstream response.</param>
     /// <param name="context">The HTTP context being answered.</param>
-    /// <param name="request">The caller's request.</param>
-    /// <param name="resolved">The routing outcome.</param>
-    /// <param name="messageId">The identifier to report for the message.</param>
+    /// <param name="turn">The turn being served.</param>
     /// <param name="services">The services the turn is served from.</param>
     /// <param name="cancellationToken">Abandons the turn when the client disconnects.</param>
     /// <returns>The result to return, or <see langword="null"/> once a streamed body has been written.</returns>
     private static async Task<IResult?> DispatchAsync(
         HttpResponseMessage response,
         HttpContext context,
-        MessagesRequest request,
-        ResolvedModel resolved,
-        string messageId,
+        TurnContext turn,
         MessageServices services,
         CancellationToken cancellationToken)
     {
@@ -152,11 +148,9 @@ public static class MessagesEndpointExtensions
             return await UpstreamFailureAsync(response, services.Logger, cancellationToken).ConfigureAwait(false);
         }
 
-        return request.IsStreaming
-            ? await StreamAsync(response, context, request, resolved, messageId, services, cancellationToken)
-                .ConfigureAwait(false)
-            : await CompleteAsync(response, request, resolved, messageId, services, cancellationToken)
-                .ConfigureAwait(false);
+        return turn.Request.IsStreaming
+            ? await StreamAsync(response, context, turn, services, cancellationToken).ConfigureAwait(false)
+            : await CompleteAsync(response, turn, services, cancellationToken).ConfigureAwait(false);
     }
 
     /// <summary>Logs the exact request sent upstream, when debug logging is enabled.</summary>
@@ -290,35 +284,120 @@ public static class MessagesEndpointExtensions
     /// <summary>Forwards a streamed upstream turn as Anthropic events.</summary>
     /// <param name="response">The upstream response.</param>
     /// <param name="context">The HTTP context the events are written to.</param>
-    /// <param name="request">The caller's request.</param>
-    /// <param name="resolved">The routing outcome.</param>
-    /// <param name="messageId">The identifier to report for the message.</param>
+    /// <param name="turn">The turn being served.</param>
     /// <param name="services">The services the turn is served from.</param>
     /// <param name="cancellationToken">Abandons the turn when the client disconnects.</param>
     /// <returns>Always <see langword="null"/>, because the body has already been written.</returns>
     private static async Task<IResult?> StreamAsync(
         HttpResponseMessage response,
         HttpContext context,
-        MessagesRequest request,
-        ResolvedModel resolved,
-        string messageId,
+        TurnContext turn,
         MessageServices services,
         CancellationToken cancellationToken)
     {
         var writer = await BeginStreamAsync(context).ConfigureAwait(false);
-        var idleTimeout = TimeSpan.FromSeconds(services.Timeouts.StreamIdleSeconds);
+        var request = turn.Request;
+        var inputTokens = TokenEstimator.Estimate(request.Messages, request.System, request.Tools);
 
+        var current = response;
+        var owned = false;
+
+        try
+        {
+            for (var attempt = 1; true; attempt++)
+            {
+                var translator = NewTranslator(writer, turn.Resolved, services);
+                var outcome = await TranslateStreamAsync(current, translator, turn, inputTokens, services, cancellationToken)
+                    .ConfigureAwait(false);
+
+                if (outcome != StreamTurnOutcome.FailedBeforeOutput)
+                {
+                    return null;
+                }
+
+                // Nothing has reached the client, so the whole turn can be asked for again. Past
+                // the budget the failure is finally reported, held until now so that a turn which
+                // succeeds on a later attempt never shows the client what it took.
+                if (attempt >= services.Retries.MaxAttempts)
+                {
+                    await translator.WriteHeldFailureAsync(cancellationToken).ConfigureAwait(false);
+                    NvidiaLog.StreamRetriesExhausted(services.Logger, attempt);
+                    return null;
+                }
+
+                NvidiaLog.RetryingStreamBeforeOutput(services.Logger, attempt, services.Retries.MaxAttempts);
+
+                if (owned)
+                {
+                    current.Dispose();
+                }
+
+                current = await services.Client.SendChatAsync(turn.UpstreamRequest, cancellationToken).ConfigureAwait(false);
+                owned = true;
+
+                if (current.IsSuccessStatusCode)
+                {
+                    continue;
+                }
+
+                // The re-issued call was refused outright, which the ladder inside the client has
+                // already exhausted its own attempts on. There is nothing further to try.
+                await translator.WriteHeldFailureAsync(cancellationToken).ConfigureAwait(false);
+                return null;
+            }
+        }
+        finally
+        {
+            if (owned)
+            {
+                current.Dispose();
+            }
+        }
+    }
+
+    /// <summary>Builds the translator one attempt at a streamed turn is served by.</summary>
+    /// <param name="writer">The writer the Anthropic events are emitted through.</param>
+    /// <param name="resolved">The routing outcome.</param>
+    /// <param name="services">The services the turn is served from.</param>
+    /// <returns>The translator.</returns>
+    /// <remarks>
+    /// One instance serves one attempt, because its bookkeeping is the state of a stream that no
+    /// longer exists once the attempt fails.
+    /// </remarks>
+    private static NimStreamTranslator NewTranslator(
+        AnthropicSseWriter writer,
+        ResolvedModel resolved,
+        MessageServices services)
+    {
         // A reasoning model may have had its opening <think> written by the chat template rather
         // than by itself, whatever this turn asked for: the GLM 5.3 template seeds it
         // unconditionally and never reads enable_thinking.
         var seeded = resolved.ThinkingEnabled || NimModelCatalogDefaults.SupportsThinking(resolved.NimModel);
-        var translator = new NimStreamTranslator(
+
+        return new(
             writer,
             resolved.ThinkingEnabled,
             seeded,
-            idleTimeout,
+            TimeSpan.FromSeconds(services.Timeouts.StreamIdleSeconds),
             services.Logger);
+    }
 
+    /// <summary>Translates one attempt at a streamed turn.</summary>
+    /// <param name="response">The upstream response to read.</param>
+    /// <param name="translator">The translator serving this attempt.</param>
+    /// <param name="turn">The turn being served.</param>
+    /// <param name="inputTokens">The prompt size to report.</param>
+    /// <param name="services">The services the turn is served from.</param>
+    /// <param name="cancellationToken">Abandons the turn when the client disconnects.</param>
+    /// <returns>How the attempt ended.</returns>
+    private static async Task<StreamTurnOutcome> TranslateStreamAsync(
+        HttpResponseMessage response,
+        NimStreamTranslator translator,
+        TurnContext turn,
+        int inputTokens,
+        MessageServices services,
+        CancellationToken cancellationToken)
+    {
         Stream upstream;
         try
         {
@@ -326,25 +405,17 @@ public static class MessagesEndpointExtensions
         }
         catch (Exception error) when (IsUpstreamTransportFailure(error) && !cancellationToken.IsCancellationRequested)
         {
-            // Headers for the 200 response are already flushed at this point, so there is no
-            // status code left to change; the client learns about this the same way it learns
-            // about any other mid-stream failure, through an error event on the stream itself.
+            // Nothing has been written yet, so this is still recoverable by asking again.
             NvidiaLog.LogUpstreamTransportFailure(services.Logger, error);
-            await WriteStreamStartFailureAsync(writer, cancellationToken).ConfigureAwait(false);
-            return null;
+            return StreamTurnOutcome.FailedBeforeOutput;
         }
 
         await using (upstream.ConfigureAwait(false))
         {
-            await translator.TranslateAsync(
-                upstream,
-                messageId,
-                request.Model,
-                TokenEstimator.Estimate(request.Messages, request.System, request.Tools),
-                cancellationToken).ConfigureAwait(false);
+            return await translator
+                .TranslateAsync(upstream, turn.MessageId, turn.Request.Model, inputTokens, cancellationToken)
+                .ConfigureAwait(false);
         }
-
-        return null;
     }
 
     /// <summary>Turns reasoning off for a turn whose answer is read by a machine.</summary>
@@ -405,20 +476,18 @@ public static class MessagesEndpointExtensions
 
     /// <summary>Translates a completed upstream turn.</summary>
     /// <param name="response">The upstream response.</param>
-    /// <param name="request">The caller's request.</param>
-    /// <param name="resolved">The routing outcome.</param>
-    /// <param name="messageId">The identifier to report for the message.</param>
+    /// <param name="turn">The turn being served.</param>
     /// <param name="services">The services the turn is served from.</param>
     /// <param name="cancellationToken">Abandons the turn when the client disconnects.</param>
     /// <returns>The Anthropic message.</returns>
     private static async Task<IResult?> CompleteAsync(
         HttpResponseMessage response,
-        MessagesRequest request,
-        ResolvedModel resolved,
-        string messageId,
+        TurnContext turn,
         MessageServices services,
         CancellationToken cancellationToken)
     {
+        var request = turn.Request;
+
         // The pooled client carries no timeout of its own, so the body read is bounded here.
         // Headers were already received; this covers only the wait for the rest of the body.
         using var bodyTimeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
@@ -443,10 +512,10 @@ public static class MessagesEndpointExtensions
 
         var message = NimCompletionTranslator.Translate(
             completion,
-            messageId,
+            turn.MessageId,
             request.Model,
             TokenEstimator.Estimate(request.Messages, request.System, request.Tools),
-            resolved.ThinkingEnabled,
+            turn.Resolved.ThinkingEnabled,
             services.Logger);
 
         return TypedResults.Json(message, ProxyJsonContext.Default.MessagesResponse);

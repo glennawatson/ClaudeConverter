@@ -38,6 +38,9 @@ public sealed class MessagesEndpointExtensionsTests
     /// <summary>The user text shared by the real-turn fixtures.</summary>
     private const string OrdinaryUserText = "hello, how are you?";
 
+    /// <summary>The number of upstream calls one retried streamed turn takes.</summary>
+    private const int CallsAfterOneStreamRetry = 2;
+
     /// <summary>A request missing a model name is rejected before an upstream call is attempted.</summary>
     /// <returns>A task that completes when the assertions have run.</returns>
     [Test]
@@ -126,6 +129,80 @@ public sealed class MessagesEndpointExtensionsTests
 
         var typed = (JsonHttpResult<ErrorResponse>)result!;
         await Assert.That(typed.StatusCode).IsEqualTo(StatusCodes.Status500InternalServerError);
+    }
+
+    /// <summary>A streamed turn that failed before producing anything is asked for again.</summary>
+    /// <returns>A task that completes when the assertions have run.</returns>
+    /// <remarks>
+    /// NVIDIA reports saturation inside an already-committed 200, which no status-code retry can
+    /// catch. Nothing has reached the client at that point though, so the whole turn can be asked
+    /// for again and the client never learns it happened — which is the difference between a
+    /// session that carries on and one that stops on the upstream being busy.
+    /// </remarks>
+    [Test]
+    public async Task StreamedTurnFailingBeforeOutputIsRetried()
+    {
+        const string Overloaded = """
+            data: {"error":{"message":"Service temporarily overloaded","code":503}}
+
+            data: [DONE]
+
+            """;
+
+        const string Answer = """
+            data: {"choices":[{"delta":{"content":"recovered"}}]}
+
+            data: [DONE]
+
+            """;
+
+        // The fake records each request before invoking this, so the first call sees a count of one.
+        var client = new FakeNimClient();
+        client.OnSendChat = _ => SaturatedResponse(client.Requests.Count == 1 ? Overloaded : Answer);
+
+        var context = Context();
+        var request = new MessagesRequest(
+            ClaudeModel,
+            [new(AnthropicMessage.UserRole, MessageContent.FromText(OrdinaryUserText))],
+            OrdinaryMaxTokens,
+            Stream: true);
+
+        _ = await MessagesEndpointExtensions.SendMessageAsync(request, context, Services(client), CancellationToken.None);
+
+        var body = Encoding.UTF8.GetString(((MemoryStream)context.Response.Body).ToArray());
+
+        await Assert.That(client.Requests.Count).IsEqualTo(CallsAfterOneStreamRetry);
+        await Assert.That(body).Contains("recovered");
+        await Assert.That(body).DoesNotContain("overloaded");
+    }
+
+    /// <summary>A streamed turn that never produces anything reports the failure in the end.</summary>
+    /// <returns>A task that completes when the assertions have run.</returns>
+    [Test]
+    public async Task StreamedTurnFailingEveryAttemptReportsTheFailure()
+    {
+        const string Overloaded = """
+            data: {"error":{"message":"Service temporarily overloaded","code":503}}
+
+            data: [DONE]
+
+            """;
+
+        var client = new FakeNimClient { OnSendChat = static _ => SaturatedResponse(Overloaded) };
+
+        var context = Context();
+        var request = new MessagesRequest(
+            ClaudeModel,
+            [new(AnthropicMessage.UserRole, MessageContent.FromText(OrdinaryUserText))],
+            OrdinaryMaxTokens,
+            Stream: true);
+
+        _ = await MessagesEndpointExtensions.SendMessageAsync(request, context, Services(client), CancellationToken.None);
+
+        var body = Encoding.UTF8.GetString(((MemoryStream)context.Response.Body).ToArray());
+
+        await Assert.That(client.Requests.Count).IsGreaterThan(1);
+        await Assert.That(body).Contains("overloaded_error");
     }
 
     /// <summary>A structured-output turn asks for no reasoning trace.</summary>
@@ -326,6 +403,7 @@ public sealed class MessagesEndpointExtensionsTests
             client,
             new RequestGate(new RateLimitOptions(RequestsPerWindow: 0, MaxConcurrency: 0)),
             new NvidiaNimOptions(),
+            new RetryOptions(),
             new ModelCatalogOptions(),
             new OptimizationOptions(),
             new HttpTimeoutOptions(),
@@ -342,12 +420,20 @@ public sealed class MessagesEndpointExtensionsTests
             client,
             new RequestGate(new RateLimitOptions(RequestsPerWindow: 0, MaxConcurrency: 0)),
             new NvidiaNimOptions(),
+            new RetryOptions(),
             new ModelCatalogOptions(),
             new OptimizationOptions(),
             new HttpTimeoutOptions(),
             logger);
 
     /// <summary>Builds a JSON-bodied response for a completed upstream call.</summary>
+    /// <summary>Wraps a raw server-sent event body as a successful upstream response.</summary>
+    /// <param name="sse">The event body.</param>
+    /// <returns>The response.</returns>
+    private static HttpResponseMessage SaturatedResponse(string sse) =>
+        new(HttpStatusCode.OK) { Content = new StringContent(sse) };
+
+    /// <summary>Wraps a completion as a JSON upstream response.</summary>
     /// <param name="status">The status to return.</param>
     /// <param name="completion">The completion to serialize as the body.</param>
     /// <returns>The response.</returns>

@@ -52,6 +52,19 @@ public sealed class NimStreamTranslator(
     /// <summary>The longest run of an unreadable payload that is written to the log.</summary>
     private const int LoggedPayloadLength = 400;
 
+    /// <summary>The latch value meaning the opening event has been written, committing the turn.</summary>
+    private const int Committed = 1;
+
+    /// <summary>The failure reported when every attempt failed without the upstream saying why.</summary>
+    /// <remarks>
+    /// Carries a 503 rather than no status, because that is what it was: the upstream could not be
+    /// read. The status is what the client classifies on, and it decides whether the turn is worth
+    /// trying again — which this one is.
+    /// </remarks>
+    private static readonly NimStreamError UnreachableUpstream = new(
+        "The upstream connection failed or timed out before the turn produced anything.",
+        Code: StatusCodes.Status503ServiceUnavailable);
+
     /// <summary>The splitter that lifts inline reasoning tags out of streamed answer text.</summary>
     private readonly ThinkTagParser _thinkParser = new(reasoningMayBeSeeded);
 
@@ -94,6 +107,21 @@ public sealed class NimStreamTranslator(
     /// <summary>The usage the upstream reported, absent until it sends the final chunk.</summary>
     private NimUsage? _usage;
 
+    /// <summary>Tracks whether the opening event has been written, as a latch rather than a flag.</summary>
+    private int _started;
+
+    /// <summary>The failure this turn ended with, held in case a later attempt succeeds instead.</summary>
+    private NimStreamError? _failure;
+
+    /// <summary>The identifier to report for the Anthropic message, once the turn commits.</summary>
+    private string _messageId = string.Empty;
+
+    /// <summary>The model identifier to echo back, once the turn commits.</summary>
+    private string _model = string.Empty;
+
+    /// <summary>The prompt size to report, once the turn commits.</summary>
+    private int _inputTokens;
+
     /// <summary>Reads the upstream stream to completion, emitting Anthropic events as it goes.</summary>
     /// <param name="upstream">The NIM response body.</param>
     /// <param name="messageId">The identifier to report for the Anthropic message.</param>
@@ -101,7 +129,7 @@ public sealed class NimStreamTranslator(
     /// <param name="inputTokens">The prompt size to report.</param>
     /// <param name="cancellationToken">Abandons the translation when the client disconnects.</param>
     /// <returns>A task that completes once the final event has been written.</returns>
-    public async ValueTask TranslateAsync(
+    public async ValueTask<StreamTurnOutcome> TranslateAsync(
         Stream upstream,
         string messageId,
         string model,
@@ -110,7 +138,11 @@ public sealed class NimStreamTranslator(
     {
         ArgumentNullException.ThrowIfNull(upstream);
 
-        await WriteMessageStartAsync(messageId, model, inputTokens, cancellationToken).ConfigureAwait(false);
+        // Held rather than written, because writing it is what commits the turn. Until a block
+        // opens, a failure can still be answered by asking for the whole turn again.
+        _messageId = messageId;
+        _model = model;
+        _inputTokens = inputTokens;
 
         using var reader = new StreamReader(upstream);
 
@@ -120,12 +152,25 @@ public sealed class NimStreamTranslator(
 
         if (await ReadToCompletionAsync(reader, idle, cancellationToken).ConfigureAwait(false))
         {
-            return;
+            return Volatile.Read(ref _started) == Committed ? StreamTurnOutcome.Failed : StreamTurnOutcome.FailedBeforeOutput;
         }
 
         await FlushAsync(inputTokens, cancellationToken).ConfigureAwait(false);
         NvidiaLog.StreamCompleted(logger, _chunksRead, _chunksSkipped);
+
+        return StreamTurnOutcome.Completed;
     }
+
+    /// <summary>Reports the failure on the stream, once no further attempt will be made.</summary>
+    /// <param name="cancellationToken">Abandons the write when the client disconnects.</param>
+    /// <returns>A task that completes once the event has been written.</returns>
+    /// <remarks>
+    /// Held back while a retry was still possible, so that a turn which succeeds on a later attempt
+    /// never shows the client the failures it took to get there.
+    /// </remarks>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public ValueTask WriteHeldFailureAsync(CancellationToken cancellationToken) =>
+        WriteErrorAsync(_failure ?? UnreachableUpstream, cancellationToken);
 
     /// <summary>Clips a payload so one log line stays a line rather than a dump of the whole chunk.</summary>
     /// <param name="payload">The payload to clip.</param>
@@ -180,9 +225,15 @@ public sealed class NimStreamTranslator(
                 LogStreamFailure(new(error.Message));
             }
 
-            await WriteErrorAsync(
-                new("The upstream connection failed or timed out before the turn finished.", Code: StatusCodes.Status503ServiceUnavailable),
-                cancellationToken).ConfigureAwait(false);
+            _failure = new(
+                "The upstream connection failed or timed out before the turn finished.",
+                Code: StatusCodes.Status503ServiceUnavailable);
+
+            if (Volatile.Read(ref _started) == Committed)
+            {
+                await WriteErrorAsync(_failure, cancellationToken).ConfigureAwait(false);
+            }
+
             return true;
         }
 
@@ -221,8 +272,16 @@ public sealed class NimStreamTranslator(
         // having nothing to say.
         if (chunk.Error is { } failure)
         {
-            await WriteErrorAsync(failure, cancellationToken).ConfigureAwait(false);
             LogStreamFailure(failure);
+            _failure = failure;
+
+            // Held while nothing has been written: the caller may ask for the turn again, and a
+            // turn that then succeeds should never have shown the client the failure it took.
+            if (Volatile.Read(ref _started) == Committed)
+            {
+                await WriteErrorAsync(failure, cancellationToken).ConfigureAwait(false);
+            }
+
             return true;
         }
 
@@ -699,6 +758,10 @@ public sealed class NimStreamTranslator(
     /// <returns>A task that completes once the final event has been written.</returns>
     private async ValueTask FlushAsync(int inputTokens, CancellationToken cancellationToken)
     {
+        // A turn that produced nothing still commits here, because the client is owed a
+        // well-formed message even when the model had nothing to put in it.
+        await EnsureStartedAsync(cancellationToken).ConfigureAwait(false);
+
         _segments.Clear();
         _thinkParser.Flush(_segments);
         await EmitSegmentsAsync(cancellationToken).ConfigureAwait(false);
@@ -777,13 +840,33 @@ public sealed class NimStreamTranslator(
     /// <param name="block">The block being opened.</param>
     /// <param name="cancellationToken">Abandons the write when the client disconnects.</param>
     /// <returns>A task that completes once the event has been written.</returns>
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private ValueTask WriteBlockStartAsync(int index, ContentBlock block, CancellationToken cancellationToken) =>
-        writer.WriteAsync(
+    /// <remarks>
+    /// Every block the turn can produce opens through here, so this is where the turn commits: the
+    /// opening event is written first, and from this point the client has been promised an answer.
+    /// </remarks>
+    private async ValueTask WriteBlockStartAsync(int index, ContentBlock block, CancellationToken cancellationToken)
+    {
+        await EnsureStartedAsync(cancellationToken).ConfigureAwait(false);
+
+        await writer.WriteAsync(
             StreamEventNames.ContentBlockStart,
             new(index, block),
             ProxyJsonContext.Default.StreamContentBlockStart,
-            cancellationToken);
+            cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>Writes the opening event, the first time anything is about to be written.</summary>
+    /// <param name="cancellationToken">Abandons the write when the client disconnects.</param>
+    /// <returns>A task that completes once the turn has been committed.</returns>
+    private async ValueTask EnsureStartedAsync(CancellationToken cancellationToken)
+    {
+        if (Interlocked.Exchange(ref _started, Committed) == Committed)
+        {
+            return;
+        }
+
+        await WriteMessageStartAsync(_messageId, _model, _inputTokens, cancellationToken).ConfigureAwait(false);
+    }
 
     /// <summary>Writes the event that appends to an open content block.</summary>
     /// <param name="index">The index of the block being appended to.</param>

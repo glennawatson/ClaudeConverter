@@ -63,6 +63,30 @@ internal static partial class NvidiaLog
         double delayMilliseconds,
         Exception error);
 
+    /// <summary>Records that a streamed turn is being asked for again, having produced nothing.</summary>
+    /// <param name="logger">The log to write to.</param>
+    /// <param name="attempt">The attempt that failed.</param>
+    /// <param name="maxAttempts">The configured attempt budget.</param>
+    /// <remarks>
+    /// The client sees none of this. A streamed turn that fails before opening a block has
+    /// promised nothing, so the turn is re-issued and only the attempt that succeeds is ever
+    /// written out — which makes this line the only evidence the earlier ones happened.
+    /// </remarks>
+    [LoggerMessage(
+        EventId = 1023,
+        Level = LogLevel.Warning,
+        Message = "A streamed turn failed before producing anything on attempt {Attempt} of {MaxAttempts}; asking again.")]
+    internal static partial void RetryingStreamBeforeOutput(ILogger logger, int attempt, int maxAttempts);
+
+    /// <summary>Records that every attempt at a streamed turn failed before producing anything.</summary>
+    /// <param name="logger">The log to write to.</param>
+    /// <param name="attempts">How many attempts were made.</param>
+    [LoggerMessage(
+        EventId = 1024,
+        Level = LogLevel.Warning,
+        Message = "A streamed turn produced nothing across {Attempts} attempts; the failure was reported to the client.")]
+    internal static partial void StreamRetriesExhausted(ILogger logger, int attempts);
+
     /// <summary>Records that the retry budget ran out with the upstream still failing.</summary>
     /// <param name="logger">The log to write to.</param>
     /// <param name="status">The status the last attempt returned.</param>
