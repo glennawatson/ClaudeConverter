@@ -29,9 +29,11 @@ namespace ClaudeNim.Aot.Nvidia;
 /// </para>
 /// <para>
 /// The pooled <see cref="HttpClient"/> carries no timeout of its own, because one bound cannot fit
-/// both a streamed and a non-streamed call: a stream is bounded by idle time in
-/// <see cref="NimStreamTranslator"/> instead, and both kinds bound the wait for a response's
-/// headers here, since that phase is unbounded on either shape of call.
+/// both a streamed and a non-streamed call. A stream is bounded by idle time in
+/// <see cref="NimStreamTranslator"/> once it is running, and by a short header wait here before it
+/// is. A non-streamed call is bounded here by <see cref="HttpTimeoutOptions.CompletionSeconds"/>,
+/// because NIM sends it nothing until the answer is finished — the wait for its headers is the
+/// whole generation, not a phase before one.
 /// </para>
 /// <para>
 /// A failed model listing is reported as an absent listing rather than an exception, because the
@@ -107,7 +109,7 @@ public sealed record NimClient(
     /// <inheritdoc/>
     public async ValueTask<NimModelList?> ListModelsAsync(CancellationToken cancellationToken)
     {
-        using var timeout = BoundedToken(cancellationToken);
+        using var timeout = BoundedToken(TimeSpan.FromSeconds(Timeouts.ReadSeconds), cancellationToken);
         using var response = await Api.ListModelsAsync(timeout.Token).ConfigureAwait(false);
 
         if (response.IsSuccessStatusCode)
@@ -150,9 +152,8 @@ public sealed record NimClient(
     /// <returns><see langword="true"/> when the attempt failed for a reason that may not recur.</returns>
     /// <remarks>
     /// A status the upstream returns is already retried by the caller's ladder; an attempt that
-    /// never got a status at all was not, and simply failed the turn. A dropped connection and a
-    /// header wait that ran out are the two ways NVIDIA's endpoints go quiet under load, so the
-    /// turn that gave up was giving up on the most ordinary failure there is.
+    /// never got a status at all was not, and simply failed the turn. A dropped connection is the
+    /// ordinary way NVIDIA's endpoints go quiet under load, and it costs nothing to ask again.
     /// The caller's own cancellation is excluded: that is the client leaving, and there is no one
     /// left to retry for.
     /// </remarks>
@@ -160,7 +161,45 @@ public sealed record NimClient(
         !cancellationToken.IsCancellationRequested
         && error is HttpRequestException or IOException or OperationCanceledException;
 
-    /// <summary>Issues one chat completion call, bounded by the header-wait timeout.</summary>
+    /// <summary>Determines whether an attempt was ended by this proxy's own deadline.</summary>
+    /// <param name="timeout">The deadline the attempt was bounded by.</param>
+    /// <param name="cancellationToken">The caller's own cancellation.</param>
+    /// <returns><see langword="true"/> when the deadline ran out with the client still waiting.</returns>
+    /// <remarks>
+    /// This is not the dropped connection above, and it is the one failure here worth telling
+    /// apart, because asking again is the wrong answer to it. The deadline is the whole budget an
+    /// attempt was given; a model that did not finish inside it will not finish inside the next
+    /// one either, so a retry spends the same wait over again and the client — which is running a
+    /// deadline of its own — gives up while the proxy is still busy on attempt three.
+    /// </remarks>
+    private static bool ExpiredDeadline(CancellationTokenSource timeout, CancellationToken cancellationToken) =>
+        timeout.IsCancellationRequested && !cancellationToken.IsCancellationRequested;
+
+    /// <summary>Links a token to a deadline.</summary>
+    /// <param name="budget">How long the call it bounds may take.</param>
+    /// <param name="cancellationToken">The caller's own cancellation.</param>
+    /// <returns>The linked source; disposing it releases the timer.</returns>
+    private static CancellationTokenSource BoundedToken(TimeSpan budget, CancellationToken cancellationToken)
+    {
+        var linked = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        linked.CancelAfter(budget);
+        return linked;
+    }
+
+    /// <summary>Works out how long one attempt at a call may take.</summary>
+    /// <param name="request">The request about to be sent.</param>
+    /// <returns>The deadline the attempt is bounded by.</returns>
+    /// <remarks>
+    /// A streamed call gets the short bound, because what it is waiting for is headers and those
+    /// arrive long before the answer does. A non-streamed call gets the long one, because NIM
+    /// withholds the status line until the answer is complete and so the same wait covers the
+    /// entire generation.
+    /// </remarks>
+    [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.AggressiveInlining)]
+    private TimeSpan Budget(NimChatRequest request) =>
+        TimeSpan.FromSeconds(request.Stream ? Timeouts.ReadSeconds : Timeouts.CompletionSeconds);
+
+    /// <summary>Issues one chat completion call, bounded by the deadline its shape calls for.</summary>
     /// <param name="request">The request to send.</param>
     /// <param name="cancellationToken">Abandons the call when the client disconnects.</param>
     /// <returns>The upstream response, with headers received.</returns>
@@ -171,12 +210,20 @@ public sealed record NimClient(
     /// </remarks>
     private async ValueTask<HttpResponseMessage> SendAsync(NimChatRequest request, CancellationToken cancellationToken)
     {
+        var budget = Budget(request);
+
         for (var attempt = 1; true; attempt++)
         {
+            using var timeout = BoundedToken(budget, cancellationToken);
+
             try
             {
-                using var timeout = BoundedToken(cancellationToken);
                 return await Api.SendChatAsync(request, timeout.Token).ConfigureAwait(false);
+            }
+            catch (Exception error) when (ExpiredDeadline(timeout, cancellationToken))
+            {
+                NvidiaLog.UpstreamDeadlineExpired(Logger, budget.TotalSeconds, request.Stream, error);
+                throw;
             }
             catch (Exception error) when (IsRetryableTransport(error, cancellationToken) && attempt < Retries.MaxAttempts)
             {
@@ -185,15 +232,5 @@ public sealed record NimClient(
                 await Task.Delay(delay, Time, cancellationToken).ConfigureAwait(false);
             }
         }
-    }
-
-    /// <summary>Links a token to the configured header-wait timeout.</summary>
-    /// <param name="cancellationToken">The caller's own cancellation.</param>
-    /// <returns>The linked source; disposing it releases the timer.</returns>
-    private CancellationTokenSource BoundedToken(CancellationToken cancellationToken)
-    {
-        var linked = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-        linked.CancelAfter(TimeSpan.FromSeconds(Timeouts.ReadSeconds));
-        return linked;
     }
 }

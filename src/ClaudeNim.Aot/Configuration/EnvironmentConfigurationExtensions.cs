@@ -84,6 +84,8 @@ public static class EnvironmentConfigurationExtensions
 
         new("READ_TIMEOUT_SECONDS", "Timeouts:ReadSeconds"),
         new("CONNECT_TIMEOUT_SECONDS", "Timeouts:ConnectSeconds"),
+        new("STREAM_IDLE_TIMEOUT_SECONDS", "Timeouts:StreamIdleSeconds"),
+        new("COMPLETION_TIMEOUT_SECONDS", "Timeouts:CompletionSeconds"),
 
         new("MOCK_QUOTA_PROBE", "Optimizations:MockQuotaProbe"),
         new("SKIP_TITLE_GENERATION", "Optimizations:SkipTitleGeneration"),

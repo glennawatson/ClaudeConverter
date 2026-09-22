@@ -63,6 +63,27 @@ internal static partial class NvidiaLog
         double delayMilliseconds,
         Exception error);
 
+    /// <summary>Records that the upstream did not answer inside the time the call was given.</summary>
+    /// <param name="logger">The log to write to.</param>
+    /// <param name="budgetSeconds">The deadline the call was bounded by.</param>
+    /// <param name="streaming">Whether the call asked for a streamed answer.</param>
+    /// <param name="error">The cancellation the deadline surfaced as.</param>
+    /// <remarks>
+    /// Told apart from the dropped connection above because the operator's response differs. A
+    /// drop is the network having a bad minute and is retried here; a deadline that ran out is
+    /// this proxy deciding the model was taking too long, and the only fix for it is a larger
+    /// budget — which is why the budget the call was actually given is in the line.
+    /// </remarks>
+    [LoggerMessage(
+        EventId = 1026,
+        Level = LogLevel.Warning,
+        Message = "NIM did not answer within {BudgetSeconds}s (streaming: {Streaming}); the turn was given up on rather than asked again.")]
+    internal static partial void UpstreamDeadlineExpired(
+        ILogger logger,
+        double budgetSeconds,
+        bool streaming,
+        Exception error);
+
     /// <summary>Records that a streamed turn is being asked for again, having produced nothing.</summary>
     /// <param name="logger">The log to write to.</param>
     /// <param name="attempt">The attempt that failed.</param>

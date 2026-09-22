@@ -31,6 +31,15 @@ public sealed class NimClientTests
     /// <summary>The timeout settings used across the fixtures.</summary>
     private static readonly HttpTimeoutOptions Timeouts = new();
 
+    /// <summary>Timeout settings whose header wait runs out at once, while the completion budget does not.</summary>
+    private static readonly HttpTimeoutOptions ImmediateDeadline = new(ReadSeconds: 0, CompletionSeconds: 30);
+
+    /// <summary>An answer slow enough that a header wait of zero has long since run out.</summary>
+    private static readonly TimeSpan SlowAnswerDelay = TimeSpan.FromMilliseconds(250);
+
+    /// <summary>An answer that never arrives, so only a deadline can end the call.</summary>
+    private static readonly TimeSpan UnreachedAnswerDelay = TimeSpan.FromMinutes(5);
+
     /// <summary>A request carrying reasoning controls, so a downgrade has something to drop.</summary>
     private static readonly NimChatRequest RequestWithReasoning = new(
         "nvidia/nemotron-3-super-120b-a12b",
@@ -38,6 +47,13 @@ public sealed class NimClientTests
         MaxTokens: 100,
         Stream: false,
         ReasoningEffort: "high");
+
+    /// <summary>A streamed request, which is bounded by the header wait rather than the completion budget.</summary>
+    private static readonly NimChatRequest StreamedRequest = new(
+        "nvidia/nemotron-3-super-120b-a12b",
+        [new NimChatMessage("user", NimContent.FromText("hi"))],
+        MaxTokens: 100,
+        Stream: true);
 
     /// <summary>A single successful call is not retried.</summary>
     /// <returns>A task that completes when the assertion has run.</returns>
@@ -218,6 +234,60 @@ public sealed class NimClientTests
 
         await Assert.That(response.IsSuccessStatusCode).IsTrue();
         await Assert.That(attempt).IsEqualTo(CallsAfterOneTransientFailure);
+    }
+
+    /// <summary>A call this proxy abandoned on its own deadline is not asked again.</summary>
+    /// <returns>A task that completes when the assertions have run.</returns>
+    /// <remarks>
+    /// This is a regression test for a live defect. The deadline is the whole budget an attempt
+    /// was given, so retrying one that ran out spends the same wait two more times — and the
+    /// client, running a deadline of its own, gave up long before the third attempt came back.
+    /// </remarks>
+    [Test]
+    public async Task ExpiredDeadlineIsNotRetried()
+    {
+        var api = new FakeNimApi { AnswerDelay = UnreachedAnswerDelay };
+        var client = new NimClient(api, Retries, ImmediateDeadline, TimeProvider.System, NullLogger<NimClient>.Instance);
+
+        _ = await Assert.That(async () => await client.SendChatAsync(StreamedRequest, CancellationToken.None))
+            .Throws<TaskCanceledException>();
+
+        await Assert.That(api.SendChatCalls).IsEqualTo(1);
+    }
+
+    /// <summary>A non-streamed call is bounded by the completion budget, not the header wait.</summary>
+    /// <returns>A task that completes when the assertion has run.</returns>
+    /// <remarks>
+    /// NIM sends nothing at all until a non-streamed answer has finished generating, so the wait
+    /// for its headers is the generation. Bounding it by the header wait cut off every answer that
+    /// took longer than one — which, on a reasoning model working through a long prompt, is most
+    /// of the ones worth waiting for.
+    /// </remarks>
+    [Test]
+    public async Task NonStreamedCallOutlivesTheHeaderWait()
+    {
+        var api = new FakeNimApi { AnswerDelay = SlowAnswerDelay, OnSendChat = static _ => new HttpResponseMessage(HttpStatusCode.OK) };
+        var client = new NimClient(api, Retries, ImmediateDeadline, TimeProvider.System, NullLogger<NimClient>.Instance);
+
+        var response = await client.SendChatAsync(RequestWithReasoning, CancellationToken.None);
+
+        await Assert.That(response.IsSuccessStatusCode).IsTrue();
+    }
+
+    /// <summary>A deadline that ran out is reported at a level an operator runs at.</summary>
+    /// <returns>A task that completes when the assertions have run.</returns>
+    [Test]
+    public async Task ExpiredDeadlineIsReportedAsAWarning()
+    {
+        var api = new FakeNimApi { AnswerDelay = UnreachedAnswerDelay };
+        var logger = new CapturingLogger<NimClient>();
+        var client = new NimClient(api, Retries, ImmediateDeadline, TimeProvider.System, logger);
+
+        _ = await Assert.That(async () => await client.SendChatAsync(StreamedRequest, CancellationToken.None))
+            .Throws<TaskCanceledException>();
+
+        var expired = Warnings(logger).Find(static entry => entry.Message.Contains("did not answer within", StringComparison.Ordinal));
+        await Assert.That(expired.Message).IsNotNull();
     }
 
     /// <summary>A caller that has gone away is not retried for.</summary>

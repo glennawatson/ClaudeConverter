@@ -19,6 +19,9 @@ internal sealed class FakeNimApi : INimApi
     /// <summary>Gets or sets the responder invoked by <see cref="ListModelsAsync"/>.</summary>
     public Func<IApiResponse<NimModelList>>? OnListModels { get; set; }
 
+    /// <summary>Gets or sets how long a call takes to answer, during which it can still be abandoned.</summary>
+    public TimeSpan AnswerDelay { get; set; }
+
     /// <summary>Gets the number of times <see cref="SendChatAsync"/> was called.</summary>
     public int SendChatCalls { get; private set; }
 
@@ -26,11 +29,25 @@ internal sealed class FakeNimApi : INimApi
     public int ListModelsCalls { get; private set; }
 
     /// <inheritdoc/>
-    public Task<HttpResponseMessage> SendChatAsync(NimChatRequest request, CancellationToken cancellationToken)
+    /// <remarks>
+    /// The token is honoured the way the real transport honours one — a call that is abandoned
+    /// while it is still waiting raises <see cref="TaskCanceledException"/> rather than answering
+    /// — so a fixture can exercise what the policy above does with a deadline that ran out.
+    /// </remarks>
+    public async Task<HttpResponseMessage> SendChatAsync(NimChatRequest request, CancellationToken cancellationToken)
     {
         SendChatCalls++;
-        var response = OnSendChat?.Invoke(request) ?? new HttpResponseMessage(System.Net.HttpStatusCode.OK);
-        return Task.FromResult(response);
+
+        if (AnswerDelay > TimeSpan.Zero)
+        {
+            await Task.Delay(AnswerDelay, cancellationToken).ConfigureAwait(false);
+        }
+        else if (cancellationToken.IsCancellationRequested)
+        {
+            throw new TaskCanceledException();
+        }
+
+        return OnSendChat?.Invoke(request) ?? new HttpResponseMessage(System.Net.HttpStatusCode.OK);
     }
 
     /// <inheritdoc/>
