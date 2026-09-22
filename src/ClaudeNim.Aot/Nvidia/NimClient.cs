@@ -144,6 +144,22 @@ public sealed record NimClient(
             : NimRequestDowngrade.WithoutReasoningControls(request)
                 ?? NimRequestDowngrade.WithoutReplayedReasoning(request);
 
+    /// <summary>Determines whether a failed attempt is worth making again.</summary>
+    /// <param name="error">The exception the attempt raised.</param>
+    /// <param name="cancellationToken">The caller's own cancellation.</param>
+    /// <returns><see langword="true"/> when the attempt failed for a reason that may not recur.</returns>
+    /// <remarks>
+    /// A status the upstream returns is already retried by the caller's ladder; an attempt that
+    /// never got a status at all was not, and simply failed the turn. A dropped connection and a
+    /// header wait that ran out are the two ways NVIDIA's endpoints go quiet under load, so the
+    /// turn that gave up was giving up on the most ordinary failure there is.
+    /// The caller's own cancellation is excluded: that is the client leaving, and there is no one
+    /// left to retry for.
+    /// </remarks>
+    private static bool IsRetryableTransport(Exception error, CancellationToken cancellationToken) =>
+        !cancellationToken.IsCancellationRequested
+        && error is HttpRequestException or IOException or OperationCanceledException;
+
     /// <summary>Issues one chat completion call, bounded by the header-wait timeout.</summary>
     /// <param name="request">The request to send.</param>
     /// <param name="cancellationToken">Abandons the call when the client disconnects.</param>
@@ -155,8 +171,20 @@ public sealed record NimClient(
     /// </remarks>
     private async ValueTask<HttpResponseMessage> SendAsync(NimChatRequest request, CancellationToken cancellationToken)
     {
-        using var timeout = BoundedToken(cancellationToken);
-        return await Api.SendChatAsync(request, timeout.Token).ConfigureAwait(false);
+        for (var attempt = 1; true; attempt++)
+        {
+            try
+            {
+                using var timeout = BoundedToken(cancellationToken);
+                return await Api.SendChatAsync(request, timeout.Token).ConfigureAwait(false);
+            }
+            catch (Exception error) when (IsRetryableTransport(error, cancellationToken) && attempt < Retries.MaxAttempts)
+            {
+                var delay = RetrySchedule.Delay(attempt, Retries, retryAfter: null, Time.GetUtcNow());
+                NvidiaLog.RetryingAfterTransportFailure(Logger, attempt, Retries.MaxAttempts, delay.TotalMilliseconds, error);
+                await Task.Delay(delay, Time, cancellationToken).ConfigureAwait(false);
+            }
+        }
     }
 
     /// <summary>Links a token to the configured header-wait timeout.</summary>

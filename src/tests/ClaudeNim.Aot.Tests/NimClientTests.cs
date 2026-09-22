@@ -186,6 +186,56 @@ public sealed class NimClientTests
         await Assert.That(result).IsNull();
     }
 
+    /// <summary>An attempt that never reached a status is made again.</summary>
+    /// <param name="failure">The transport failure the first attempt raises.</param>
+    /// <returns>A task that completes when the assertions have run.</returns>
+    /// <remarks>
+    /// This is a regression test for a live defect. A status the upstream returns was retried; an
+    /// attempt that got no status at all escaped the ladder and failed the turn outright. A
+    /// dropped connection and a header wait that ran out are the two ways NVIDIA's endpoints go
+    /// quiet under load, so the turn was giving up on the most ordinary failure there is.
+    /// </remarks>
+    [Test]
+    [Arguments(typeof(HttpRequestException))]
+    [Arguments(typeof(TaskCanceledException))]
+    [Arguments(typeof(IOException))]
+    public async Task AttemptThatNeverReachedAStatusIsRetried(Type failure)
+    {
+        var attempt = 0;
+        var api = new FakeNimApi
+        {
+            OnSendChat = _ =>
+            {
+                var current = attempt;
+                attempt++;
+                return current == 0
+                    ? throw (Exception)Activator.CreateInstance(failure)!
+                    : new HttpResponseMessage(HttpStatusCode.OK);
+            },
+        };
+
+        var response = await Client(api).SendChatAsync(RequestWithReasoning, CancellationToken.None);
+
+        await Assert.That(response.IsSuccessStatusCode).IsTrue();
+        await Assert.That(attempt).IsEqualTo(CallsAfterOneTransientFailure);
+    }
+
+    /// <summary>A caller that has gone away is not retried for.</summary>
+    /// <returns>A task that completes when the assertion has run.</returns>
+    [Test]
+    public async Task CancelledCallerIsNotRetriedFor()
+    {
+        using var cancelled = new CancellationTokenSource();
+        await cancelled.CancelAsync();
+
+        var api = new FakeNimApi { OnSendChat = static _ => throw new TaskCanceledException() };
+
+        _ = await Assert.That(async () => await Client(api).SendChatAsync(RequestWithReasoning, cancelled.Token))
+            .Throws<TaskCanceledException>();
+
+        await Assert.That(api.SendChatCalls).IsEqualTo(1);
+    }
+
     /// <summary>A spent retry budget is reported at a level an operator runs at.</summary>
     /// <returns>A task that completes when the assertions have run.</returns>
     /// <remarks>

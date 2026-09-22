@@ -46,6 +46,23 @@ internal static partial class NvidiaLog
         int maxAttempts,
         double delayMilliseconds);
 
+    /// <summary>Records that an attempt which never reached a status is being made again.</summary>
+    /// <param name="logger">The log to write to.</param>
+    /// <param name="attempt">The attempt that failed.</param>
+    /// <param name="maxAttempts">The configured attempt budget.</param>
+    /// <param name="delayMilliseconds">How long the next attempt waits.</param>
+    /// <param name="error">The transport failure.</param>
+    [LoggerMessage(
+        EventId = 1022,
+        Level = LogLevel.Warning,
+        Message = "The upstream call failed before any status on attempt {Attempt} of {MaxAttempts}; retrying in {DelayMilliseconds}ms.")]
+    internal static partial void RetryingAfterTransportFailure(
+        ILogger logger,
+        int attempt,
+        int maxAttempts,
+        double delayMilliseconds,
+        Exception error);
+
     /// <summary>Records that the retry budget ran out with the upstream still failing.</summary>
     /// <param name="logger">The log to write to.</param>
     /// <param name="status">The status the last attempt returned.</param>
