@@ -14,4 +14,7 @@ public enum UpstreamProvider
 
     /// <summary>An OpenAI-compatible endpoint — literal OpenAI, or Azure AI Foundry's Models endpoint.</summary>
     OpenAi = 2,
+
+    /// <summary>Real Anthropic, reached close to verbatim through the Anthropic route only.</summary>
+    Anthropic = 3,
 }

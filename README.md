@@ -240,6 +240,7 @@ export CLAUDENIM_ModelRouting__EnableThinking=false
 | `ModelHealth` | How many failures put a model in cooldown, and how long the cooldown lasts |
 | `Ollama` | A local Ollama server a `ollama:`-prefixed model resolves to |
 | `OpenAi` | A hosted OpenAI-compatible endpoint (literal OpenAI, or Azure AI Foundry) a `openai:`/`azure:`-prefixed model resolves to |
+| `AnthropicApi` | Real Anthropic a `claude:`/`anthropic:`-prefixed model resolves to |
 | `Optimizations` | The local fast paths for Claude Code's housekeeping requests |
 
 ### Model discovery
@@ -424,6 +425,23 @@ deployment the way a NIM model occasionally does. Naming it last in a tier's fal
 slowest, most reliable rung — gets a turn served even when every NIM candidate for that tier has
 failed, without needing a mode of its own for that: it is exactly the same chain, exactly the same
 walk, just addressed somewhere else on its last rung.
+
+### Falling back to real Anthropic
+
+`claude:claude-opus-5` (or the `anthropic:` alias) names real Anthropic — worth naming last in a
+chain to spend a paid Anthropic account only once NVIDIA's free tier has genuinely run out, rather
+than routing there first. It is disabled until `AnthropicApi:Enabled`/`CLAUDE_API_ENABLED` is
+turned on, and needs a standalone API key in `AnthropicApi:ApiKey`/`CLAUDE_API_KEY` — deliberately
+not the OAuth credential a Claude Pro or Max subscription authenticates with, since Anthropic's own
+Consumer Terms of Service reserve that credential for the official Claude Code CLI and Claude.ai
+and enforce it server-side outside of them.
+
+This provider is unlike the other two in one respect: nothing here translates the request or the
+response. The Messages API is this proxy's own client-facing wire format already, so a turn routed
+here is forwarded close to verbatim — only the model field changes — and the upstream's reply is
+copied back byte for byte rather than run through the NIM-shaped translators, streamed or not. That
+also means it currently only covers the Anthropic Messages route (`/v1/messages`); a turn served
+through the OpenAI Responses route (`/v1/responses`) does not yet have an equivalent.
 
 ### Cooling down a failing model
 

@@ -369,6 +369,43 @@ public sealed class MessagesEndpointExtensionsTests
         await Assert.That(ollama.Requests[0].Model).IsEqualTo(OllamaBareModel);
     }
 
+    /// <summary>A fallback entry naming real Anthropic forwards the response byte for byte, unlike a NIM-shaped one.</summary>
+    /// <returns>A task that completes when the assertions have run.</returns>
+    /// <remarks>
+    /// Real Anthropic already answers in this proxy's own client-facing shape, so nothing here
+    /// should be run through <see cref="AnthropicCompletionTranslator"/> — the body reaching the
+    /// client has to be exactly what <see cref="FakeAnthropicClient"/> handed back, not a shape
+    /// reinterpreted through a translator built for NIM's own completion format.
+    /// </remarks>
+    [Test]
+    public async Task FallbackEntryNamingAnthropicIsForwardedVerbatim()
+    {
+        const string ClaudeFallback = "claude:claude-opus-5";
+        const string ClaudeBareModel = "claude-opus-5";
+        const string RawBody = """{"id":"msg_from_anthropic","type":"message","content":[{"type":"text","text":"served"}]}""";
+
+        var client = new FakeNimClient { OnSendChat = static _ => new HttpResponseMessage(HttpStatusCode.ServiceUnavailable) };
+        var anthropic = new FakeAnthropicClient { OnSendMessages = static _ => new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent(RawBody, Encoding.UTF8, "application/json") } };
+
+        List<AnthropicMessage> messages = [new(AnthropicMessage.UserRole, MessageContent.FromText(OrdinaryUserText))];
+        var request = new MessagesRequest(ClaudeModel, messages, OrdinaryMaxTokens);
+        var context = Context();
+
+        var result = await MessagesEndpointExtensions.SendMessageAsync(
+            request,
+            context,
+            Services(client, ClaudeFallback, anthropic),
+            CancellationToken.None);
+
+        var body = Encoding.UTF8.GetString(((MemoryStream)context.Response.Body).ToArray());
+
+        await Assert.That(result).IsNull();
+        await Assert.That(body).IsEqualTo(RawBody);
+        await Assert.That(context.Response.StatusCode).IsEqualTo(StatusCodes.Status200OK);
+        await Assert.That(anthropic.Requests.Count).IsEqualTo(1);
+        await Assert.That(anthropic.Requests[0].Model).IsEqualTo(ClaudeBareModel);
+    }
+
     /// <summary>The fallback warning carries the upstream's own body, not just the status.</summary>
     /// <returns>A task that completes when the assertions have run.</returns>
     /// <remarks>
@@ -852,6 +889,7 @@ public sealed class MessagesEndpointExtensionsTests
             new HttpTimeoutOptions(),
             new FakeOpenAiCompatibleClient(),
             new FakeOpenAiCompatibleClient(),
+            new FakeAnthropicClient(),
             TimeProvider.System,
             NullLogger<MessageServices>.Instance);
 
@@ -876,6 +914,7 @@ public sealed class MessagesEndpointExtensionsTests
             new HttpTimeoutOptions(),
             new FakeOpenAiCompatibleClient(),
             new FakeOpenAiCompatibleClient(),
+            new FakeAnthropicClient(),
             TimeProvider.System,
             logger ?? NullLogger<MessageServices>.Instance);
 
@@ -899,6 +938,7 @@ public sealed class MessagesEndpointExtensionsTests
             new HttpTimeoutOptions(),
             new FakeOpenAiCompatibleClient(),
             new FakeOpenAiCompatibleClient(),
+            new FakeAnthropicClient(),
             TimeProvider.System,
             logger);
 
@@ -923,6 +963,7 @@ public sealed class MessagesEndpointExtensionsTests
             new HttpTimeoutOptions(),
             new FakeOpenAiCompatibleClient(),
             new FakeOpenAiCompatibleClient(),
+            new FakeAnthropicClient(),
             TimeProvider.System,
             NullLogger<MessageServices>.Instance);
 
@@ -947,6 +988,32 @@ public sealed class MessagesEndpointExtensionsTests
             new HttpTimeoutOptions(),
             ollamaClient,
             new FakeOpenAiCompatibleClient(),
+            new FakeAnthropicClient(),
+            TimeProvider.System,
+            NullLogger<MessageServices>.Instance);
+
+    /// <summary>Builds the services a turn is served from, with a fallback chain and a caller-supplied real-Anthropic client.</summary>
+    /// <param name="client">The fake NIM upstream client.</param>
+    /// <param name="fallback">The model the routed one steps aside for, which may name a non-NIM provider.</param>
+    /// <param name="anthropicClient">The client a fallback entry naming real Anthropic dispatches to.</param>
+    /// <returns>The services.</returns>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static MessageServices Services(FakeNimClient client, string fallback, FakeAnthropicClient anthropicClient) =>
+        new(
+            new FakeModelRouter(new(ClaudeModel, UpstreamModel, ModelTier.Sonnet, true, [fallback])),
+            client,
+            new RequestGate(new RateLimitOptions(RequestsPerWindow: 0, MaxConcurrency: 0)),
+            new NvidiaNimOptions(),
+            FastRetries,
+            new ModelCatalogOptions(),
+            new AnthropicRequestOptimizer(new OptimizationOptions()),
+            new AnthropicCompletionTranslator(NullLogger<AnthropicCompletionTranslator>.Instance),
+            new AnthropicStreamTranslatorFactory(),
+            new ModelHealthTracker(new ModelHealthOptions(), TimeProvider.System),
+            new HttpTimeoutOptions(),
+            new FakeOpenAiCompatibleClient(),
+            new FakeOpenAiCompatibleClient(),
+            anthropicClient,
             TimeProvider.System,
             NullLogger<MessageServices>.Instance);
 

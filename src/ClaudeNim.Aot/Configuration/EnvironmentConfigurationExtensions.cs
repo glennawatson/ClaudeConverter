@@ -116,6 +116,17 @@ public static class EnvironmentConfigurationExtensions
         new("OPENAI_READ_TIMEOUT_SECONDS", "OpenAi:ReadSeconds"),
         new("OPENAI_COMPLETION_TIMEOUT_SECONDS", "OpenAi:CompletionSeconds"),
 
+        // CLAUDE_API_* rather than ANTHROPIC_API_* deliberately: ANTHROPIC_API_KEY above already
+        // means the credential a caller authenticates to this proxy with, and reusing it here for
+        // the credential this proxy authenticates to real Anthropic with would make one name bind
+        // two unrelated settings depending on which one happened to be set.
+        new("CLAUDE_API_ENABLED", "AnthropicApi:Enabled"),
+        new("CLAUDE_API_BASE_URL", "AnthropicApi:BaseUrl"),
+        new("CLAUDE_API_KEY", "AnthropicApi:ApiKey"),
+        new("CLAUDE_API_VERSION", "AnthropicApi:ApiVersion"),
+        new("CLAUDE_API_READ_TIMEOUT_SECONDS", "AnthropicApi:ReadSeconds"),
+        new("CLAUDE_API_COMPLETION_TIMEOUT_SECONDS", "AnthropicApi:CompletionSeconds"),
+
         new("MOCK_QUOTA_PROBE", "Optimizations:MockQuotaProbe"),
         new("SKIP_TITLE_GENERATION", "Optimizations:SkipTitleGeneration"),
         new("SKIP_SUGGESTION_MODE", "Optimizations:SkipSuggestionMode"),

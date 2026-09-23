@@ -11,8 +11,9 @@ namespace ClaudeNim.Aot.Nvidia;
 /// <c>SonnetFallbacks</c>, the default model itself — accepts the same syntax, so a deployment can
 /// mix providers in one ordered chain without a parallel list or a different setting per provider.
 /// A bare identifier such as <c>nvidia/nemotron-3-super-120b-a12b</c> is NIM, unchanged from before
-/// this existed; <c>ollama:qwen3-coder:30b</c> or <c>openai:gpt-5-mini</c> name a different one. The
-/// prefix is proxy-internal addressing and never reaches the wire — only <see cref="Model"/> does.
+/// this existed; <c>ollama:qwen3-coder:30b</c>, <c>openai:gpt-5-mini</c> or <c>claude:claude-opus-5</c>
+/// name a different one. The prefix is proxy-internal addressing and never reaches the wire — only
+/// <see cref="Model"/> does.
 /// </remarks>
 [System.Diagnostics.DebuggerDisplay("UpstreamModelId: {ToString(),nq}")]
 public readonly record struct UpstreamModelId(UpstreamProvider Provider, string Model)
@@ -25,6 +26,12 @@ public readonly record struct UpstreamModelId(UpstreamProvider Provider, string 
 
     /// <summary>An alias for <see cref="OpenAiPrefix"/>, since an Azure AI Foundry deployment speaks the same shape.</summary>
     private const string AzurePrefix = "azure";
+
+    /// <summary>The prefix that addresses real Anthropic.</summary>
+    private const string ClaudePrefix = "claude";
+
+    /// <summary>An alias for <see cref="ClaudePrefix"/>.</summary>
+    private const string AnthropicPrefix = "anthropic";
 
     /// <summary>Parses a configured model identifier.</summary>
     /// <param name="modelId">The identifier as configuration names it.</param>
@@ -52,6 +59,7 @@ public readonly record struct UpstreamModelId(UpstreamProvider Provider, string 
         {
             OllamaPrefix => new(UpstreamProvider.Ollama, rest),
             OpenAiPrefix or AzurePrefix => new(UpstreamProvider.OpenAi, rest),
+            ClaudePrefix or AnthropicPrefix => new(UpstreamProvider.Anthropic, rest),
             _ => new(UpstreamProvider.Nim, modelId),
         };
     }

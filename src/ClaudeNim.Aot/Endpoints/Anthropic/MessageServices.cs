@@ -23,6 +23,7 @@ namespace ClaudeNim.Aot.Endpoints.Anthropic;
 /// <param name="Timeouts">The configured upstream timeouts.</param>
 /// <param name="OllamaClient">The transport a model addressed with the <c>ollama:</c> prefix resolves to.</param>
 /// <param name="OpenAiClient">The transport a model addressed with the <c>openai:</c>/<c>azure:</c> prefix resolves to.</param>
+/// <param name="AnthropicClient">The transport a model addressed with the <c>claude:</c>/<c>anthropic:</c> prefix resolves to.</param>
 /// <param name="Time">The clock a re-issued streamed turn's backoff is measured against.</param>
 /// <param name="Logger">The diagnostic log.</param>
 /// <remarks>
@@ -44,5 +45,6 @@ public sealed record MessageServices(
     HttpTimeoutOptions Timeouts,
     IOpenAiCompatibleClient OllamaClient,
     IOpenAiCompatibleClient OpenAiClient,
+    IAnthropicClient AnthropicClient,
     TimeProvider Time,
     ILogger<MessageServices> Logger);

@@ -66,7 +66,7 @@ public static class ProxyServiceExtensions
             ArgumentNullException.ThrowIfNull(services);
             ArgumentNullException.ThrowIfNull(configuration);
 
-            var (nim, timeouts, ollama, openAi) = services.AddOptions(configuration);
+            var (nim, timeouts, ollama, openAi, anthropic) = services.AddOptions(configuration);
 
             _ = services.AddSingleton(TimeProvider.System);
             _ = services.AddSingleton<IModelRouter, ModelRouter>();
@@ -82,6 +82,7 @@ public static class ProxyServiceExtensions
             // type, and MessageServices/CodexServices need both by name, not whichever won last.
             _ = services.AddSingleton(sp => new OllamaClient(sp.GetRequiredService<IOllamaApi>(), ollama));
             _ = services.AddSingleton(sp => new OpenAiClient(sp.GetRequiredService<IOpenAiApi>(), openAi));
+            _ = services.AddSingleton(sp => new AnthropicClient(sp.GetRequiredService<IAnthropicApi>(), anthropic));
 
             // Each protocol registers its own IRequestOptimizer (or none, if it has no housekeeping
             // traffic worth recognising), ICompletionTranslator and IStreamTranslatorFactory behind
@@ -99,13 +100,13 @@ public static class ProxyServiceExtensions
 
             _ = services.AddSingleton<ProxyAuthenticationFilter>();
 
-            return services.AddNimTransport(nim, timeouts).AddOpenAiCompatibleTransports(ollama, openAi);
+            return services.AddNimTransport(nim, timeouts).AddOpenAiCompatibleTransports(ollama, openAi).AddAnthropicTransport(anthropic);
         }
 
         /// <summary>Binds and registers every configuration section the proxy is assembled from.</summary>
         /// <param name="configuration">The bound configuration.</param>
         /// <returns>The settings the transport registrations need directly.</returns>
-        private (NvidiaNimOptions Nim, HttpTimeoutOptions Timeouts, OllamaOptions Ollama, OpenAiCompatibleOptions OpenAi) AddOptions(IConfiguration configuration)
+        private (NvidiaNimOptions Nim, HttpTimeoutOptions Timeouts, OllamaOptions Ollama, OpenAiCompatibleOptions OpenAi, AnthropicApiOptions Anthropic) AddOptions(IConfiguration configuration)
         {
             var nim = configuration.GetSection(NvidiaNimOptions.SectionName).Get<NvidiaNimOptions>()
                 ?? new NvidiaNimOptions();
@@ -115,14 +116,17 @@ public static class ProxyServiceExtensions
                 ?? new OllamaOptions();
             var openAi = configuration.GetSection(OpenAiCompatibleOptions.SectionName).Get<OpenAiCompatibleOptions>()
                 ?? new OpenAiCompatibleOptions();
+            var anthropic = configuration.GetSection(AnthropicApiOptions.SectionName).Get<AnthropicApiOptions>()
+                ?? new AnthropicApiOptions();
 
             _ = services.AddSingleton(nim);
             _ = services.AddSingleton(timeouts);
             _ = services.AddSingleton(ollama);
             _ = services.AddSingleton(openAi);
+            _ = services.AddSingleton(anthropic);
             _ = services.AddRemainingOptions(configuration);
 
-            return (nim, timeouts, ollama, openAi);
+            return (nim, timeouts, ollama, openAi, anthropic);
         }
 
         /// <summary>Binds and registers every configuration section not needed directly by a transport registration.</summary>
@@ -216,6 +220,32 @@ public static class ProxyServiceExtensions
 
             return services;
         }
+
+        /// <summary>Registers the generated Refit surface real Anthropic is reached through.</summary>
+        /// <param name="anthropic">The configured real-Anthropic settings.</param>
+        /// <returns>The same container, so calls can be chained.</returns>
+        /// <remarks>
+        /// Registered unconditionally, whether or not the provider is enabled, the same as
+        /// <see cref="AddOpenAiCompatibleTransports"/> — <see cref="AnthropicClient"/> is what
+        /// actually decides whether a call is ever attempted. Real Anthropic authenticates with
+        /// <c>x-api-key</c> and <c>anthropic-version</c> rather than a bearer token, so the headers
+        /// are set directly here instead of through <c>AddAuthorizationHeaderValueProvider</c>.
+        /// </remarks>
+        private IServiceCollection AddAnthropicTransport(AnthropicApiOptions anthropic)
+        {
+            _ = services
+                .AddRefitGeneratedClient<IAnthropicApi>(ProxyJsonContext.Default, static _ => TransportSettings)
+                .ConfigureHttpClient(client =>
+                {
+                    client.BaseAddress = new(BaseAddressOf(anthropic.BaseUrl));
+                    client.Timeout = Timeout.InfiniteTimeSpan;
+                    client.DefaultRequestHeaders.Add("x-api-key", anthropic.ApiKey);
+                    client.DefaultRequestHeaders.Add("anthropic-version", anthropic.ApiVersion);
+                })
+                .ConfigurePrimaryHttpMessageHandler(static () => new SocketsHttpHandler { PooledConnectionLifetime = ConnectionLifetime });
+
+            return services;
+        }
     }
 
     /// <summary>Points minimal API's own JSON serialization at the proxy's generated context.</summary>
@@ -248,6 +278,7 @@ public static class ProxyServiceExtensions
         provider.GetRequiredService<HttpTimeoutOptions>(),
         provider.GetRequiredService<OllamaClient>(),
         provider.GetRequiredService<OpenAiClient>(),
+        provider.GetRequiredService<AnthropicClient>(),
         provider.GetRequiredService<TimeProvider>(),
         provider.GetRequiredService<ILogger<MessageServices>>());
 

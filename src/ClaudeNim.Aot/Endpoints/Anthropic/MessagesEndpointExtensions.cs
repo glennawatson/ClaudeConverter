@@ -280,9 +280,9 @@ public static class MessagesEndpointExtensions
     /// <returns>The upstream response.</returns>
     /// <remarks>
     /// This is the one place a model identifier's provider prefix is read to decide where a call
-    /// actually goes; everywhere else, a turn just carries a string. Ollama and an OpenAI-compatible
-    /// endpoint take no attempt budget of their own — neither has NIM's retry ladder — so it is only
-    /// meaningful on the NIM branch.
+    /// actually goes; everywhere else, a turn just carries a string. Ollama, an OpenAI-compatible
+    /// endpoint and real Anthropic all take no attempt budget of their own — none has NIM's retry
+    /// ladder — so it is only meaningful on the NIM branch.
     /// </remarks>
     private static Task<HttpResponseMessage> SendUpstreamAsync(
         TurnContext turn,
@@ -296,6 +296,7 @@ public static class MessagesEndpointExtensions
         {
             UpstreamProvider.Ollama => services.OllamaClient.SendChatAsync(turn.UpstreamRequest, cancellationToken),
             UpstreamProvider.OpenAi => services.OpenAiClient.SendChatAsync(turn.UpstreamRequest, cancellationToken),
+            UpstreamProvider.Anthropic => services.AnthropicClient.SendMessagesAsync(turn.Request with { Model = parsed.Model }, cancellationToken),
             _ => services.Client.SendChatAsync(turn.UpstreamRequest, turn.Resolved.Tier, maxAttempts, cancellationToken).AsTask(),
         };
     }
@@ -430,9 +431,54 @@ public static class MessagesEndpointExtensions
             return await UpstreamFailureAsync(response, turn.Resolved.NimModel, services.Logger, cancellationToken).ConfigureAwait(false);
         }
 
+        if (UpstreamModelId.Parse(turn.Resolved.NimModel).Provider == UpstreamProvider.Anthropic)
+        {
+            return await PassthroughAsync(response, context, turn, services, cancellationToken).ConfigureAwait(false);
+        }
+
         return turn.Request.IsStreaming
             ? await StreamAsync(response, context, turn, services, cancellationToken).ConfigureAwait(false)
             : await CompleteAsync(response, turn, services, cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>Forwards a response from real Anthropic to the client unexamined.</summary>
+    /// <param name="response">The upstream response.</param>
+    /// <param name="context">The HTTP context being answered.</param>
+    /// <param name="turn">The turn being served.</param>
+    /// <param name="services">The services the turn is served from.</param>
+    /// <param name="cancellationToken">Abandons the turn when the client disconnects.</param>
+    /// <returns>Always <see langword="null"/>, because the body has already been written.</returns>
+    /// <remarks>
+    /// Real Anthropic already speaks this proxy's own client-facing wire format, streamed or not,
+    /// so nothing here reshapes the body the way <see cref="StreamAsync"/> and
+    /// <see cref="CompleteAsync"/> do for NIM's shape — it is copied across byte for byte. A
+    /// streamed call is also marked available at its header alone rather than deferred to the body
+    /// finishing, unlike <see cref="TryOnceAsync"/>'s own bookkeeping: real Anthropic reports a
+    /// rejection through its HTTP status, not from inside an otherwise-successful stream the way
+    /// NVIDIA does, so this is only ever reached once that status is already known to be a success.
+    /// </remarks>
+    private static async Task<IResult?> PassthroughAsync(
+        HttpResponseMessage response,
+        HttpContext context,
+        TurnContext turn,
+        MessageServices services,
+        CancellationToken cancellationToken)
+    {
+        services.ModelHealth.MarkAvailable(turn.Resolved.NimModel);
+
+        context.Response.StatusCode = (int)response.StatusCode;
+        if (response.Content.Headers.ContentType is { } contentType)
+        {
+            context.Response.ContentType = contentType.ToString();
+        }
+
+        var upstream = await response.Content.ReadAsStreamAsync(cancellationToken).ConfigureAwait(false);
+        await using (upstream.ConfigureAwait(false))
+        {
+            await upstream.CopyToAsync(context.Response.Body, cancellationToken).ConfigureAwait(false);
+        }
+
+        return null;
     }
 
     /// <summary>Logs the exact request sent upstream, when debug logging is enabled.</summary>

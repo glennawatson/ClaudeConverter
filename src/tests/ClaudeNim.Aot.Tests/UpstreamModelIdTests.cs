@@ -52,6 +52,28 @@ public sealed class UpstreamModelIdTests
         await Assert.That(parsed.Model).IsEqualTo("gpt-5-mini");
     }
 
+    /// <summary>A <c>claude:</c> prefix addresses real Anthropic.</summary>
+    /// <returns>A task that completes when the assertions have run.</returns>
+    [Test]
+    public async Task ClaudePrefixAddressesRealAnthropic()
+    {
+        var parsed = UpstreamModelId.Parse("claude:claude-opus-5");
+
+        await Assert.That(parsed.Provider).IsEqualTo(UpstreamProvider.Anthropic);
+        await Assert.That(parsed.Model).IsEqualTo("claude-opus-5");
+    }
+
+    /// <summary>An <c>anthropic:</c> prefix is an alias for the same real-Anthropic provider.</summary>
+    /// <returns>A task that completes when the assertions have run.</returns>
+    [Test]
+    public async Task AnthropicPrefixIsAnAliasForRealAnthropic()
+    {
+        var parsed = UpstreamModelId.Parse("anthropic:claude-opus-5");
+
+        await Assert.That(parsed.Provider).IsEqualTo(UpstreamProvider.Anthropic);
+        await Assert.That(parsed.Model).IsEqualTo("claude-opus-5");
+    }
+
     /// <summary>A prefix this proxy does not recognise is kept as a whole NIM model name, not stripped.</summary>
     /// <returns>A task that completes when the assertions have run.</returns>
     [Test]
