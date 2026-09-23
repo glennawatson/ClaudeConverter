@@ -196,7 +196,7 @@ jobs:
           RID: ${{ matrix.rid }}
           VERSION: ${{ needs.build.outputs.semver2 }}
         run: |
-          dotnet publish src/ClaudeNim.Aot/ClaudeNim.Aot.csproj -c Release -r "$RID" -p:MinVerVersionOverride="$VERSION" -o "publish/$RID"
+          dotnet publish src/ClaudeNim.Aot/ClaudeNim.Aot.csproj -c Release -f net10.0 -r "$RID" -p:MinVerVersionOverride="$VERSION" -o "publish/$RID"
 
       - name: Zip the published output
         shell: bash
