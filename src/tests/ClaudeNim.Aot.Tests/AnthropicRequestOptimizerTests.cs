@@ -3,6 +3,7 @@
 // See the LICENSE file in the project root for full license information.
 using ClaudeNim.Aot.Anthropic;
 using ClaudeNim.Aot.Configuration;
+using ClaudeNim.Aot.Endpoints.Anthropic;
 using ClaudeNim.Aot.Optimizations;
 
 namespace ClaudeNim.Aot.Tests;
@@ -13,7 +14,7 @@ namespace ClaudeNim.Aot.Tests;
 /// real question with a canned string, so the negative cases here matter as much as the positive
 /// ones.
 /// </remarks>
-public sealed class RequestOptimizerTests
+public sealed class AnthropicRequestOptimizerTests
 {
     /// <summary>The output ceiling an ordinary turn uses.</summary>
     private const int OrdinaryMaxTokens = 1024;
@@ -26,7 +27,7 @@ public sealed class RequestOptimizerTests
     [Test]
     public async Task QuotaProbeIsAnswered()
     {
-        var recognised = RequestOptimizer.TryAnswer(Request("quota", maxTokens: 1), AllOn, out var answer);
+        var recognised = Optimizer(AllOn).TryAnswer(Request("quota", maxTokens: 1), out var answer);
 
         await Assert.That(recognised).IsTrue();
         await Assert.That(answer).IsEqualTo("Quota check passed.");
@@ -36,7 +37,7 @@ public sealed class RequestOptimizerTests
     /// <returns>A task that completes when the assertion has run.</returns>
     [Test]
     public async Task OrdinaryTurnMentioningQuotaIsForwarded() =>
-        await Assert.That(RequestOptimizer.TryAnswer(Request("quota"), AllOn, out _)).IsFalse();
+        await Assert.That(Optimizer(AllOn).TryAnswer(Request("quota"), out _)).IsFalse();
 
     /// <summary>A suggestion request is answered with nothing.</summary>
     /// <returns>A task that completes when the assertions have run.</returns>
@@ -44,7 +45,7 @@ public sealed class RequestOptimizerTests
     public async Task SuggestionRequestIsAnsweredEmpty()
     {
         var request = Request("[SUGGESTION MODE: complete this] git che");
-        var recognised = RequestOptimizer.TryAnswer(request, AllOn, out var answer);
+        var recognised = Optimizer(AllOn).TryAnswer(request, out var answer);
 
         await Assert.That(recognised).IsTrue();
         await Assert.That(answer).IsEmpty();
@@ -56,7 +57,7 @@ public sealed class RequestOptimizerTests
     public async Task PrefixRequestIsAnsweredFromItsCommand()
     {
         var request = Request("<policy_spec> rules here\nCommand:\ngit commit -m hi\nOutput:\nok");
-        var recognised = RequestOptimizer.TryAnswer(request, AllOn, out var answer);
+        var recognised = Optimizer(AllOn).TryAnswer(request, out var answer);
 
         await Assert.That(recognised).IsTrue();
         await Assert.That(answer).IsEqualTo("git commit");
@@ -68,7 +69,7 @@ public sealed class RequestOptimizerTests
     public async Task FilePathRequestIsAnsweredFromItsCommand()
     {
         var request = Request("Command:\ncat notes.md\nOutput:\nsome text\nReturn filepaths");
-        var recognised = RequestOptimizer.TryAnswer(request, AllOn, out var answer);
+        var recognised = Optimizer(AllOn).TryAnswer(request, out var answer);
 
         await Assert.That(recognised).IsTrue();
         await Assert.That(answer).IsEqualTo("<filepaths>\nnotes.md\n</filepaths>");
@@ -79,11 +80,12 @@ public sealed class RequestOptimizerTests
     [Test]
     public async Task TitleRequestNeedsCorroboration()
     {
+        var optimizer = Optimizer(AllOn);
         var bare = Request("hello", system: "Give this a title");
-        await Assert.That(RequestOptimizer.TryAnswer(bare, AllOn, out _)).IsFalse();
+        await Assert.That(optimizer.TryAnswer(bare, out _)).IsFalse();
 
         var real = Request("hello", system: "Write a short sentence-case title for this coding session");
-        var recognised = RequestOptimizer.TryAnswer(real, AllOn, out var answer);
+        var recognised = optimizer.TryAnswer(real, out var answer);
 
         await Assert.That(recognised).IsTrue();
         await Assert.That(answer).IsEqualTo("Conversation");
@@ -110,14 +112,14 @@ public sealed class RequestOptimizerTests
 
         var request = Request("Command:\nls -la /tmp\nOutput:\n", system: hugeSystemPrompt);
 
-        await Assert.That(RequestOptimizer.TryAnswer(request, AllOn, out _)).IsFalse();
+        await Assert.That(Optimizer(AllOn).TryAnswer(request, out _)).IsFalse();
     }
 
     /// <summary>An ordinary turn is forwarded untouched.</summary>
     /// <returns>A task that completes when the assertion has run.</returns>
     [Test]
     public async Task OrdinaryTurnIsForwarded() =>
-        await Assert.That(RequestOptimizer.TryAnswer(Request("refactor this method"), AllOn, out _))
+        await Assert.That(Optimizer(AllOn).TryAnswer(Request("refactor this method"), out _))
             .IsFalse();
 
     /// <summary>A disabled fast path forwards the request it would have answered.</summary>
@@ -128,8 +130,13 @@ public sealed class RequestOptimizerTests
         var options = AllOn with { DetectCommandPrefix = false };
         var request = Request("<policy_spec> rules\nCommand:\ngit commit\nOutput:\nok");
 
-        await Assert.That(RequestOptimizer.TryAnswer(request, options, out _)).IsFalse();
+        await Assert.That(Optimizer(options).TryAnswer(request, out _)).IsFalse();
     }
+
+    /// <summary>Builds an optimizer configured with the given switches.</summary>
+    /// <param name="options">The switches for each fast path.</param>
+    /// <returns>The optimizer.</returns>
+    private static AnthropicRequestOptimizer Optimizer(OptimizationOptions options) => new(options);
 
     /// <summary>Builds a request carrying one user turn.</summary>
     /// <param name="text">The user text.</param>

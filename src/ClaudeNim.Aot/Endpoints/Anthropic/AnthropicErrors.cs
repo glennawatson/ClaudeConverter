@@ -6,7 +6,7 @@ using ClaudeNim.Aot.Anthropic;
 using ClaudeNim.Aot.Serialization;
 using Microsoft.AspNetCore.Http;
 
-namespace ClaudeNim.Aot.Endpoints;
+namespace ClaudeNim.Aot.Endpoints.Anthropic;
 
 /// <summary>Builds the error bodies Anthropic clients know how to act on.</summary>
 /// <remarks>

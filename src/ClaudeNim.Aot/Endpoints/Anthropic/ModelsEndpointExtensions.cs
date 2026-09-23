@@ -9,7 +9,7 @@ using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Routing;
 
-namespace ClaudeNim.Aot.Endpoints;
+namespace ClaudeNim.Aot.Endpoints.Anthropic;
 
 /// <summary>The Models API, which is how a Claude client discovers what it can run.</summary>
 /// <remarks>

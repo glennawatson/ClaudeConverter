@@ -3,10 +3,12 @@
 // See the LICENSE file in the project root for full license information.
 using ClaudeNim.Aot.Anthropic;
 using ClaudeNim.Aot.Configuration;
+using ClaudeNim.Aot.Optimizations;
 
-namespace ClaudeNim.Aot.Optimizations;
+namespace ClaudeNim.Aot.Endpoints.Anthropic;
 
 /// <summary>Answers Claude Code's housekeeping requests without calling the upstream.</summary>
+/// <param name="options">The switches for each fast path.</param>
 /// <remarks>
 /// <para>
 /// A coding session sends more than the turns the user typed. It also probes the credential, asks
@@ -18,8 +20,12 @@ namespace ClaudeNim.Aot.Optimizations;
 /// Every fast path is individually switchable, and a request that is not recognised is forwarded —
 /// the failure mode of a missed match is an ordinary upstream call, not an error.
 /// </para>
+/// <para>
+/// This is Claude Code's own housekeeping traffic, so it has no Codex counterpart: a Codex client
+/// simply has no <see cref="IRequestOptimizer"/> registered for it, and every turn is forwarded.
+/// </para>
 /// </remarks>
-public static class RequestOptimizer
+public sealed class AnthropicRequestOptimizer(OptimizationOptions options) : IRequestOptimizer
 {
     /// <summary>The answer returned for a quota probe.</summary>
     private const string QuotaAnswer = "Quota check passed.";
@@ -27,15 +33,10 @@ public static class RequestOptimizer
     /// <summary>The answer returned when title generation is skipped.</summary>
     private const string TitleAnswer = "Conversation";
 
-    /// <summary>Tries to answer a request locally.</summary>
-    /// <param name="request">The incoming request.</param>
-    /// <param name="options">The switches for each fast path.</param>
-    /// <param name="answer">The text to answer with, when one applies.</param>
-    /// <returns><see langword="true"/> when the request was recognised and should not be forwarded.</returns>
-    public static bool TryAnswer(MessagesRequest request, OptimizationOptions options, out string answer)
+    /// <inheritdoc/>
+    public bool TryAnswer(MessagesRequest request, out string answer)
     {
         ArgumentNullException.ThrowIfNull(request);
-        ArgumentNullException.ThrowIfNull(options);
 
         if (options.MockQuotaProbe && IsQuotaProbe(request))
         {

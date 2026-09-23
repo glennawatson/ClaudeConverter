@@ -2,6 +2,7 @@
 // Glenn Watson and Contributors licenses this file to you under the MIT license.
 // See the LICENSE file in the project root for full license information.
 using ClaudeNim.Aot.Configuration;
+using ClaudeNim.Aot.Endpoints.Anthropic;
 using Microsoft.AspNetCore.Http;
 
 namespace ClaudeNim.Aot.Endpoints;
@@ -10,7 +11,10 @@ namespace ClaudeNim.Aot.Endpoints;
 /// <param name="Options">The configured secret.</param>
 /// <remarks>
 /// An empty secret disables the check outright, which is only safe on a loopback binding. The
-/// header forms accepted are described by <see cref="CredentialHeaders"/>.
+/// header forms accepted are described by <see cref="CredentialHeaders"/>. This runs ahead of
+/// every protocol a client might be speaking, so it reports its own rejection in Anthropic's error
+/// vocabulary regardless of which one applies — the only one that exists while this proxy speaks a
+/// single protocol.
 /// </remarks>
 public sealed record ProxyAuthenticationFilter(ProxyAuthenticationOptions Options) : IEndpointFilter
 {

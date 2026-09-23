@@ -7,7 +7,7 @@ using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Routing;
 
-namespace ClaudeNim.Aot.Endpoints;
+namespace ClaudeNim.Aot.Endpoints.Anthropic;
 
 /// <summary>The token counting route Claude clients size a conversation against.</summary>
 /// <remarks>

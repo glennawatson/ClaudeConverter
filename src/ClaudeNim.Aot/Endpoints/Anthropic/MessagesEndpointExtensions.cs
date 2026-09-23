@@ -8,7 +8,6 @@ using System.Text.Json;
 using ClaudeNim.Aot.Anthropic;
 using ClaudeNim.Aot.Anthropic.Streaming;
 using ClaudeNim.Aot.Nvidia;
-using ClaudeNim.Aot.Optimizations;
 using ClaudeNim.Aot.RateLimiting;
 using ClaudeNim.Aot.Routing;
 using ClaudeNim.Aot.Serialization;
@@ -17,7 +16,7 @@ using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Routing;
 using Microsoft.Extensions.Logging;
 
-namespace ClaudeNim.Aot.Endpoints;
+namespace ClaudeNim.Aot.Endpoints.Anthropic;
 
 /// <summary>The Messages API, which is the route a Claude session actually talks through.</summary>
 /// <remarks>
@@ -80,7 +79,7 @@ public static class MessagesEndpointExtensions
         // deeper down by the client and the translator, which are never handed the identifier.
         using var scope = NvidiaLog.BeginTurn(services.Logger, messageId, request.Model);
 
-        if (RequestOptimizer.TryAnswer(request, services.Optimizations, out var canned))
+        if (services.Optimizer.TryAnswer(request, out var canned))
         {
             return await AnswerLocallyAsync(request, context, messageId, canned, cancellationToken)
                 .ConfigureAwait(false);
@@ -591,24 +590,16 @@ public static class MessagesEndpointExtensions
     /// One instance serves one attempt, because its bookkeeping is the state of a stream that no
     /// longer exists once the attempt fails.
     /// </remarks>
-    private static NimStreamTranslator NewTranslator(
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static IStreamTranslator NewTranslator(
         AnthropicSseWriter writer,
         in ResolvedModel resolved,
-        MessageServices services)
-    {
-        // A reasoning model may have had its opening <think> written by the chat template rather
-        // than by itself, whatever this turn asked for: the GLM 5.3 template seeds it
-        // unconditionally and never reads enable_thinking.
-        var seeded = resolved.ThinkingEnabled || NimModelCatalogDefaults.SupportsThinking(resolved.NimModel);
-
-        return new(
+        MessageServices services) =>
+        services.StreamTranslatorFactory.Create(
             writer,
-            resolved.NimModel,
-            resolved.ThinkingEnabled,
-            seeded,
+            resolved,
             TimeSpan.FromSeconds(services.Timeouts.StreamIdleSeconds),
             services.Logger);
-    }
 
     /// <summary>Translates one attempt at a streamed turn.</summary>
     /// <param name="response">The upstream response to read.</param>
@@ -620,7 +611,7 @@ public static class MessagesEndpointExtensions
     /// <returns>How the attempt ended.</returns>
     private static async Task<StreamTurnOutcome> TranslateStreamAsync(
         HttpResponseMessage response,
-        NimStreamTranslator translator,
+        IStreamTranslator translator,
         TurnContext turn,
         int inputTokens,
         MessageServices services,
@@ -740,14 +731,13 @@ public static class MessagesEndpointExtensions
                 "The upstream connection failed or timed out before the response body finished.");
         }
 
-        var message = NimCompletionTranslator.Translate(
+        var message = services.CompletionTranslator.Translate(
             completion,
             turn.MessageId,
             request.Model,
             turn.Resolved.NimModel,
             TokenEstimator.Estimate(request.Messages, request.System, request.Tools),
-            turn.Resolved.ThinkingEnabled,
-            services.Logger);
+            turn.Resolved.ThinkingEnabled);
 
         return TypedResults.Json(message, ProxyJsonContext.Default.MessagesResponse);
     }

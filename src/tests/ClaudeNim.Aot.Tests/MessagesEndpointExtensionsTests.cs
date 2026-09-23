@@ -8,7 +8,7 @@ using System.Text;
 using System.Text.Json;
 using ClaudeNim.Aot.Anthropic;
 using ClaudeNim.Aot.Configuration;
-using ClaudeNim.Aot.Endpoints;
+using ClaudeNim.Aot.Endpoints.Anthropic;
 using ClaudeNim.Aot.Nvidia;
 using ClaudeNim.Aot.RateLimiting;
 using ClaudeNim.Aot.Routing;
@@ -556,7 +556,9 @@ public sealed class MessagesEndpointExtensionsTests
             new NvidiaNimOptions(),
             FastRetries,
             new ModelCatalogOptions(),
-            new OptimizationOptions(),
+            new AnthropicRequestOptimizer(new OptimizationOptions()),
+            new AnthropicCompletionTranslator(NullLogger<AnthropicCompletionTranslator>.Instance),
+            new AnthropicStreamTranslatorFactory(),
             new HttpTimeoutOptions(),
             TimeProvider.System,
             NullLogger<MessageServices>.Instance);
@@ -575,7 +577,9 @@ public sealed class MessagesEndpointExtensionsTests
             new NvidiaNimOptions(),
             FastRetries,
             new ModelCatalogOptions(),
-            new OptimizationOptions(),
+            new AnthropicRequestOptimizer(new OptimizationOptions()),
+            new AnthropicCompletionTranslator(NullLogger<AnthropicCompletionTranslator>.Instance),
+            new AnthropicStreamTranslatorFactory(),
             new HttpTimeoutOptions(),
             TimeProvider.System,
             logger ?? NullLogger<MessageServices>.Instance);
@@ -593,7 +597,9 @@ public sealed class MessagesEndpointExtensionsTests
             new NvidiaNimOptions(),
             FastRetries,
             new ModelCatalogOptions(),
-            new OptimizationOptions(),
+            new AnthropicRequestOptimizer(new OptimizationOptions()),
+            new AnthropicCompletionTranslator(NullLogger<AnthropicCompletionTranslator>.Instance),
+            new AnthropicStreamTranslatorFactory(),
             new HttpTimeoutOptions(),
             TimeProvider.System,
             logger);

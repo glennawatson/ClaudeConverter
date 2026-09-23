@@ -5,7 +5,7 @@ using ClaudeNim.Aot.Anthropic;
 using ClaudeNim.Aot.Nvidia;
 using ClaudeNim.Aot.Routing;
 
-namespace ClaudeNim.Aot.Endpoints;
+namespace ClaudeNim.Aot.Endpoints.Anthropic;
 
 /// <summary>The one turn being served, in the four forms the path below needs it in.</summary>
 /// <param name="Request">The caller's request.</param>

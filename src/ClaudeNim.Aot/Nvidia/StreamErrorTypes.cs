@@ -42,7 +42,7 @@ public static class StreamErrorTypes
     {
         if (failure?.Code is { } status)
         {
-            return Endpoints.AnthropicErrors.TypeFor(status);
+            return Endpoints.Anthropic.AnthropicErrors.TypeFor(status);
         }
 
         if (failure?.Type is { Length: > 0 } declared)
