@@ -51,8 +51,14 @@ public sealed class MessagesEndpointExtensionsTests
     /// <summary>The number of upstream calls a turn takes when a one-model chain is walked and then waited out.</summary>
     private const int CallsAfterExhaustedChain = 3;
 
+    /// <summary>The number of upstream calls a turn takes when its model cools down mid-stream and falls back.</summary>
+    private const int CallsUntilMidStreamFailureCoolsDown = 3;
+
     /// <summary>The reply text a fallback fixture's upstream answers with.</summary>
     private const string ServedResponseText = "served";
+
+    /// <summary>The reply text a streamed retry fixture's upstream answers with once it succeeds.</summary>
+    private const string RecoveredResponseText = "recovered";
 
     /// <summary>Retry settings whose backoff is short enough that a re-issued turn does not slow the suite.</summary>
     private static readonly RetryOptions FastRetries = new(BaseDelayMilliseconds: 1, MaxDelayMilliseconds: 2, UseJitter: false);
@@ -165,8 +171,8 @@ public sealed class MessagesEndpointExtensionsTests
 
             """;
 
-        const string Answer = """
-            data: {"choices":[{"delta":{"content":"recovered"}}]}
+        const string Answer = $$$"""
+            data: {"choices":[{"delta":{"content":"{{{RecoveredResponseText}}}"}}]}
 
             data: [DONE]
 
@@ -188,8 +194,60 @@ public sealed class MessagesEndpointExtensionsTests
         var body = Encoding.UTF8.GetString(((MemoryStream)context.Response.Body).ToArray());
 
         await Assert.That(client.Requests.Count).IsEqualTo(CallsAfterOneStreamRetry);
-        await Assert.That(body).Contains("recovered");
+        await Assert.That(body).Contains(RecoveredResponseText);
         await Assert.That(body).DoesNotContain("overloaded");
+    }
+
+    /// <summary>Mid-stream transient failures count toward the model's cooldown, not just an outright refusal.</summary>
+    /// <returns>A task that completes when the assertions have run.</returns>
+    /// <remarks>
+    /// NVIDIA's saturation is not always visible as a refused status before generation begins: a
+    /// model can commit a <c>200</c> and still fail inside the stream, repeatedly, without that
+    /// ever surfacing as the kind of failure the chain walk's own cooldown check reacts to. Left
+    /// uncounted, a turn would keep re-issuing to the exact model that just failed until the whole
+    /// retry budget was spent, instead of falling back once the model proves itself unavailable.
+    /// </remarks>
+    [Test]
+    public async Task MidStreamTransientFailuresCountTowardCooldown()
+    {
+        const string Overloaded = """
+            data: {"error":{"message":"Service temporarily overloaded","code":503}}
+
+            data: [DONE]
+
+            """;
+
+        const string Answer = $$$"""
+            data: {"choices":[{"delta":{"content":"{{{RecoveredResponseText}}}"}}]}
+
+            data: [DONE]
+
+            """;
+
+        var modelHealth = new ModelHealthTracker(new ModelHealthOptions(), TimeProvider.System);
+        var client = new FakeNimClient { OnSendChat = static request => SaturatedResponse(request.Model == UpstreamModel ? Overloaded : Answer) };
+
+        var context = Context();
+        var request = new MessagesRequest(
+            ClaudeModel,
+            [new(AnthropicMessage.UserRole, MessageContent.FromText(OrdinaryUserText))],
+            OrdinaryMaxTokens,
+            Stream: true);
+
+        _ = await MessagesEndpointExtensions.SendMessageAsync(
+            request,
+            context,
+            Services(client, FallbackModel, modelHealth),
+            CancellationToken.None);
+
+        var body = Encoding.UTF8.GetString(((MemoryStream)context.Response.Body).ToArray());
+
+        await Assert.That(client.Requests.Count).IsEqualTo(CallsUntilMidStreamFailureCoolsDown);
+        await Assert.That(client.Requests[0].Model).IsEqualTo(UpstreamModel);
+        await Assert.That(client.Requests[1].Model).IsEqualTo(UpstreamModel);
+        await Assert.That(client.Requests[2].Model).IsEqualTo(FallbackModel);
+        await Assert.That(modelHealth.IsInCooldown(UpstreamModel)).IsTrue();
+        await Assert.That(body).Contains(RecoveredResponseText);
     }
 
     /// <summary>A streamed rejection is downgraded and retried at the same model, not the whole retry budget.</summary>
@@ -211,8 +269,8 @@ public sealed class MessagesEndpointExtensionsTests
 
             """;
 
-        const string Answer = """
-            data: {"choices":[{"delta":{"content":"recovered"}}]}
+        const string Answer = $$$"""
+            data: {"choices":[{"delta":{"content":"{{{RecoveredResponseText}}}"}}]}
 
             data: [DONE]
 
@@ -235,7 +293,7 @@ public sealed class MessagesEndpointExtensionsTests
         await Assert.That(client.Requests[0].Model).IsEqualTo(UpstreamModel);
         await Assert.That(client.Requests[1].Model).IsEqualTo(UpstreamModel);
         await Assert.That(client.Requests[1].ChatTemplateKwargs).IsNull();
-        await Assert.That(body).Contains("recovered");
+        await Assert.That(body).Contains(RecoveredResponseText);
     }
 
     /// <summary>A turn the routed model cannot serve is served by the next model in the chain.</summary>

@@ -256,7 +256,12 @@ public static class MessagesEndpointExtensions
 
         if (response.IsSuccessStatusCode)
         {
-            services.ModelHealth.MarkAvailable(turn.Resolved.NimModel);
+            // See TryOnceAsync's own comment: a streamed 200 is not yet a finished turn, so
+            // marking available here is left to whoever sees the stream through to its end.
+            if (!turn.Request.IsStreaming)
+            {
+                services.ModelHealth.MarkAvailable(turn.Resolved.NimModel);
+            }
         }
         else
         {
@@ -303,7 +308,12 @@ public static class MessagesEndpointExtensions
             return new(null, 0);
         }
 
-        if (response.IsSuccessStatusCode)
+        // A streamed call's 200 only means generation started, not that it finished: NVIDIA can
+        // still fail it from inside the body, which the caller learns about long after this
+        // returns. Marking the model available here would erase that later failure's own mark the
+        // moment this same model is asked again, so a streamed call leaves marking available to
+        // whoever actually saw the stream through to its end.
+        if (response.IsSuccessStatusCode && !turn.Request.IsStreaming)
         {
             services.ModelHealth.MarkAvailable(model);
         }
@@ -558,6 +568,9 @@ public static class MessagesEndpointExtensions
 
                 if (outcome != StreamTurnOutcome.FailedBeforeOutput)
                 {
+                    // Real output reached the client, which TryOnceAsync's own 200 could not
+                    // promise for a streamed call — this is where that promise is actually kept.
+                    services.ModelHealth.MarkAvailable(active.Resolved.NimModel);
                     ReportStreamEnded(services, active, outcome, started);
                     return null;
                 }
@@ -614,6 +627,11 @@ public static class MessagesEndpointExtensions
     /// A rejection is downgraded and asked of the same model, because the same body would only be
     /// rejected again; anything else is backed off and re-issued down the fallback chain instead,
     /// since a model that just failed to start a stream is the least likely of the lot to answer.
+    /// A transient failure is also counted against the model here: NVIDIA's saturation is not
+    /// always visible as a rejected status before generation begins, and a model that already
+    /// committed a <c>200</c> only to fail inside the stream is invisible to <see cref="TryOnceAsync"/>'s
+    /// own bookkeeping otherwise, so the chain would keep offering it back up to a re-issue that
+    /// re-selects the very model that just failed instead of moving on.
     /// </remarks>
     private static async Task<StreamRecoveryOutcome> RecoverFailedAttemptAsync(
         int attempt,
@@ -627,6 +645,7 @@ public static class MessagesEndpointExtensions
             return new(downgraded.Turn, downgraded.Response, downgraded.Response.IsSuccessStatusCode);
         }
 
+        services.ModelHealth.MarkUnavailable(active.Resolved.NimModel);
         NvidiaLog.RetryingStreamBeforeOutput(services.Logger, active.Resolved.NimModel, attempt, services.Retries.MaxAttempts);
         var reissued = await ReissueAfterBackoffAsync(attempt, active, services, cancellationToken).ConfigureAwait(false);
         return new(reissued.Turn, reissued.Response, reissued.Response.IsSuccessStatusCode);
