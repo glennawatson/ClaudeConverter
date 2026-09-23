@@ -319,6 +319,15 @@ bounded by `Timeouts:ReadSeconds`. A non-streamed call gets a bound of its own,
 generated — so the wait for its headers is the generation, and a reasoning model working through a
 long prompt routinely spends longer on it than any header wait should allow.
 
+`Timeouts:ReadSeconds` assumes a streamed call's headers arrive almost immediately, which holds for
+most models but not for the largest one in the catalogue: a model that size can legitimately spend
+well over a minute reasoning before it flushes a single byte, and it is usually the one a heavier
+tier routes to. Hitting the base bound on that model does not fail the turn outright — it silently
+downgrades it to a weaker fallback instead, which is a worse outcome than waiting a little longer
+would have been. `Timeouts:OpusReadSeconds`, `SonnetReadSeconds` and `HaikuReadSeconds` (or the
+flat `OPUS_READ_TIMEOUT_SECONDS` form) override the header-wait bound for a single tier without
+raising it — and therefore the retry cost of a genuinely dead connection — for every other one.
+
 Transient upstream failures (`429`, `500`, `502`, `503`, `504`) are retried with hand-rolled
 exponential backoff and equal jitter — half the window waited, the rest spread randomly — honouring
 a `Retry-After` header when the upstream sends one. The budget is five attempts over roughly

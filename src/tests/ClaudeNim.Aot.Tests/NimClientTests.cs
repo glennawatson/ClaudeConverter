@@ -5,6 +5,7 @@ using System.Net;
 using System.Runtime.CompilerServices;
 using ClaudeNim.Aot.Configuration;
 using ClaudeNim.Aot.Nvidia;
+using ClaudeNim.Aot.Routing;
 using ClaudeNim.Aot.Tests.Fakes;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -33,6 +34,9 @@ public sealed class NimClientTests
 
     /// <summary>Timeout settings whose header wait runs out at once, while the completion budget does not.</summary>
     private static readonly HttpTimeoutOptions ImmediateDeadline = new(ReadSeconds: 0, CompletionSeconds: 30);
+
+    /// <summary>Timeout settings whose header wait runs out at once for every tier but Opus.</summary>
+    private static readonly HttpTimeoutOptions TieredDeadline = new(ReadSeconds: 0, CompletionSeconds: 30, OpusReadSeconds: 1);
 
     /// <summary>An answer slow enough that a header wait of zero has long since run out.</summary>
     private static readonly TimeSpan SlowAnswerDelay = TimeSpan.FromMilliseconds(250);
@@ -63,7 +67,7 @@ public sealed class NimClientTests
         var api = new FakeNimApi { OnSendChat = static _ => new HttpResponseMessage(HttpStatusCode.OK) };
         var client = Client(api);
 
-        var response = await client.SendChatAsync(RequestWithReasoning, CancellationToken.None);
+        var response = await client.SendChatAsync(RequestWithReasoning, ModelTier.Default, CancellationToken.None);
 
         await Assert.That(response.IsSuccessStatusCode).IsTrue();
         await Assert.That(api.SendChatCalls).IsEqualTo(1);
@@ -88,7 +92,7 @@ public sealed class NimClientTests
         };
         var client = Client(api);
 
-        var response = await client.SendChatAsync(RequestWithReasoning, CancellationToken.None);
+        var response = await client.SendChatAsync(RequestWithReasoning, ModelTier.Default, CancellationToken.None);
 
         await Assert.That(response.IsSuccessStatusCode).IsTrue();
         await Assert.That(api.SendChatCalls).IsEqualTo(CallsAfterOneTransientFailure);
@@ -112,7 +116,7 @@ public sealed class NimClientTests
         };
         var client = Client(api);
 
-        var response = await client.SendChatAsync(RequestWithReasoning, CancellationToken.None);
+        var response = await client.SendChatAsync(RequestWithReasoning, ModelTier.Default, CancellationToken.None);
 
         await Assert.That(response.IsSuccessStatusCode).IsTrue();
         await Assert.That(seen.Count).IsEqualTo(RequestsAfterOneDowngrade);
@@ -128,7 +132,7 @@ public sealed class NimClientTests
         var api = new FakeNimApi { OnSendChat = static _ => new HttpResponseMessage(HttpStatusCode.BadRequest) };
         var client = Client(api);
 
-        var response = await client.SendChatAsync(RequestWithReasoning, CancellationToken.None);
+        var response = await client.SendChatAsync(RequestWithReasoning, ModelTier.Default, CancellationToken.None);
 
         await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.BadRequest);
     }
@@ -142,7 +146,7 @@ public sealed class NimClientTests
         var api = new FakeNimApi { OnSendChat = static _ => new HttpResponseMessage(HttpStatusCode.Forbidden) };
         var client = Client(api);
 
-        var response = await client.SendChatAsync(request, CancellationToken.None);
+        var response = await client.SendChatAsync(request, ModelTier.Default, CancellationToken.None);
 
         await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.Forbidden);
         await Assert.That(api.SendChatCalls).IsEqualTo(1);
@@ -155,7 +159,7 @@ public sealed class NimClientTests
     {
         var client = Client(new());
 
-        await Assert.That(async () => await client.SendChatAsync(null!, CancellationToken.None))
+        await Assert.That(async () => await client.SendChatAsync(null!, ModelTier.Default, CancellationToken.None))
             .Throws<ArgumentNullException>();
     }
 
@@ -230,7 +234,7 @@ public sealed class NimClientTests
             },
         };
 
-        var response = await Client(api).SendChatAsync(RequestWithReasoning, CancellationToken.None);
+        var response = await Client(api).SendChatAsync(RequestWithReasoning, ModelTier.Default, CancellationToken.None);
 
         await Assert.That(response.IsSuccessStatusCode).IsTrue();
         await Assert.That(attempt).IsEqualTo(CallsAfterOneTransientFailure);
@@ -249,7 +253,7 @@ public sealed class NimClientTests
         var api = new FakeNimApi { AnswerDelay = UnreachedAnswerDelay };
         var client = new NimClient(api, Retries, ImmediateDeadline, TimeProvider.System, NullLogger<NimClient>.Instance);
 
-        _ = await Assert.That(async () => await client.SendChatAsync(StreamedRequest, CancellationToken.None))
+        _ = await Assert.That(async () => await client.SendChatAsync(StreamedRequest, ModelTier.Default, CancellationToken.None))
             .Throws<TaskCanceledException>();
 
         await Assert.That(api.SendChatCalls).IsEqualTo(1);
@@ -269,9 +273,41 @@ public sealed class NimClientTests
         var api = new FakeNimApi { AnswerDelay = SlowAnswerDelay, OnSendChat = static _ => new HttpResponseMessage(HttpStatusCode.OK) };
         var client = new NimClient(api, Retries, ImmediateDeadline, TimeProvider.System, NullLogger<NimClient>.Instance);
 
-        var response = await client.SendChatAsync(RequestWithReasoning, CancellationToken.None);
+        var response = await client.SendChatAsync(RequestWithReasoning, ModelTier.Default, CancellationToken.None);
 
         await Assert.That(response.IsSuccessStatusCode).IsTrue();
+    }
+
+    /// <summary>A tier's configured header-wait override is used instead of the base budget.</summary>
+    /// <returns>A task that completes when the assertion has run.</returns>
+    /// <remarks>
+    /// This is a regression test for a live defect: the largest model in the catalogue can
+    /// legitimately take well over the base header-wait budget to start streaming, and the fixed
+    /// budget applied to every tier alike downgraded that turn to a weaker fallback model on every
+    /// slow start. Proven end to end, through the real deadline the streamed call is bounded by,
+    /// rather than only against <see cref="HttpTimeoutOptions.ReadSecondsFor"/> in isolation.
+    /// </remarks>
+    [Test]
+    public async Task TierOverrideExtendsTheHeaderWaitForItsOwnTier()
+    {
+        var api = new FakeNimApi { AnswerDelay = SlowAnswerDelay, OnSendChat = static _ => new HttpResponseMessage(HttpStatusCode.OK) };
+        var client = new NimClient(api, Retries, TieredDeadline, TimeProvider.System, NullLogger<NimClient>.Instance);
+
+        var response = await client.SendChatAsync(StreamedRequest, ModelTier.Opus, CancellationToken.None);
+
+        await Assert.That(response.IsSuccessStatusCode).IsTrue();
+    }
+
+    /// <summary>A tier with no configured override is not granted another tier's extended budget.</summary>
+    /// <returns>A task that completes when the assertions have run.</returns>
+    [Test]
+    public async Task UnrelatedTierDoesNotBorrowAnotherTiersOverride()
+    {
+        var api = new FakeNimApi { AnswerDelay = SlowAnswerDelay };
+        var client = new NimClient(api, Retries, TieredDeadline, TimeProvider.System, NullLogger<NimClient>.Instance);
+
+        _ = await Assert.That(async () => await client.SendChatAsync(StreamedRequest, ModelTier.Sonnet, CancellationToken.None))
+            .Throws<TaskCanceledException>();
     }
 
     /// <summary>A deadline that ran out is reported at a level an operator runs at.</summary>
@@ -283,7 +319,7 @@ public sealed class NimClientTests
         var logger = new CapturingLogger<NimClient>();
         var client = new NimClient(api, Retries, ImmediateDeadline, TimeProvider.System, logger);
 
-        _ = await Assert.That(async () => await client.SendChatAsync(StreamedRequest, CancellationToken.None))
+        _ = await Assert.That(async () => await client.SendChatAsync(StreamedRequest, ModelTier.Default, CancellationToken.None))
             .Throws<TaskCanceledException>();
 
         var expired = Warnings(logger).Find(static entry => entry.Message.Contains("did not answer", StringComparison.Ordinal));
@@ -301,7 +337,7 @@ public sealed class NimClientTests
 
         var api = new FakeNimApi { OnSendChat = static _ => throw new TaskCanceledException() };
 
-        _ = await Assert.That(async () => await Client(api).SendChatAsync(RequestWithReasoning, cancelled.Token))
+        _ = await Assert.That(async () => await Client(api).SendChatAsync(RequestWithReasoning, ModelTier.Default, cancelled.Token))
             .Throws<TaskCanceledException>();
 
         await Assert.That(api.SendChatCalls).IsEqualTo(1);
@@ -321,7 +357,7 @@ public sealed class NimClientTests
         var logger = new CapturingLogger<NimClient>();
         var client = new NimClient(api, Retries, Timeouts, TimeProvider.System, logger);
 
-        _ = await client.SendChatAsync(RequestWithReasoning, CancellationToken.None);
+        _ = await client.SendChatAsync(RequestWithReasoning, ModelTier.Default, CancellationToken.None);
 
         var exhausted = Warnings(logger).Find(static entry => entry.Message.Contains("giving up", StringComparison.Ordinal));
         await Assert.That(exhausted.Message).IsNotNull();
@@ -338,7 +374,7 @@ public sealed class NimClientTests
         var logger = new CapturingLogger<NimClient>();
         var client = new NimClient(api, Retries, Timeouts, TimeProvider.System, logger);
 
-        _ = await client.SendChatAsync(RequestWithReasoning, CancellationToken.None);
+        _ = await client.SendChatAsync(RequestWithReasoning, ModelTier.Default, CancellationToken.None);
 
         var retrying = Warnings(logger).FindAll(static entry => entry.Message.Contains("retrying in", StringComparison.Ordinal));
         await Assert.That(retrying.Count).IsGreaterThan(0);

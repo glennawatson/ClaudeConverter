@@ -3,6 +3,7 @@
 // See the LICENSE file in the project root for full license information.
 using System.Net;
 using ClaudeNim.Aot.Configuration;
+using ClaudeNim.Aot.Routing;
 using Microsoft.Extensions.Logging;
 
 namespace ClaudeNim.Aot.Nvidia;
@@ -52,12 +53,14 @@ public sealed record NimClient(
     [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.AggressiveInlining)]
     public ValueTask<HttpResponseMessage> SendChatAsync(
         NimChatRequest request,
+        ModelTier tier,
         CancellationToken cancellationToken) =>
-        SendChatAsync(request, Retries.MaxAttempts, cancellationToken);
+        SendChatAsync(request, tier, Retries.MaxAttempts, cancellationToken);
 
     /// <inheritdoc/>
     public async ValueTask<HttpResponseMessage> SendChatAsync(
         NimChatRequest request,
+        ModelTier tier,
         int maxAttempts,
         CancellationToken cancellationToken)
     {
@@ -68,7 +71,7 @@ public sealed record NimClient(
         var budget = Math.Clamp(maxAttempts, 1, Retries.MaxAttempts);
 
         var current = request;
-        var response = await SendAsync(current, budget, cancellationToken).ConfigureAwait(false);
+        var response = await SendAsync(current, tier, budget, cancellationToken).ConfigureAwait(false);
 
         // Bounded by the retry budget plus the fixed number of downgrade rungs: a downgrade never
         // repeats once applied, so the ladder cannot cycle back to a request already tried.
@@ -83,7 +86,7 @@ public sealed record NimClient(
                 NvidiaLog.ChatTemplateRejected(Logger, current.Model);
                 response.Dispose();
                 current = lighter;
-                response = await SendAsync(current, budget, cancellationToken).ConfigureAwait(false);
+                response = await SendAsync(current, tier, budget, cancellationToken).ConfigureAwait(false);
                 attempts++;
                 continue;
             }
@@ -104,7 +107,7 @@ public sealed record NimClient(
 
             response.Dispose();
             await Task.Delay(delay, Time, cancellationToken).ConfigureAwait(false);
-            response = await SendAsync(current, budget, cancellationToken).ConfigureAwait(false);
+            response = await SendAsync(current, tier, budget, cancellationToken).ConfigureAwait(false);
             attempts++;
             retried = true;
         }
@@ -201,19 +204,22 @@ public sealed record NimClient(
 
     /// <summary>Works out how long one attempt at a call may take.</summary>
     /// <param name="request">The request about to be sent.</param>
+    /// <param name="tier">The tier the turn was routed to, which a streamed call's bound may be overridden for.</param>
     /// <returns>The deadline the attempt is bounded by.</returns>
     /// <remarks>
     /// A streamed call gets the short bound, because what it is waiting for is headers and those
-    /// arrive long before the answer does. A non-streamed call gets the long one, because NIM
-    /// withholds the status line until the answer is complete and so the same wait covers the
-    /// entire generation.
+    /// arrive long before the answer does for most models — but not for all of them, which is why
+    /// the bound can be overridden per tier; see <see cref="HttpTimeoutOptions.ReadSecondsFor"/>. A
+    /// non-streamed call gets the long one, because NIM withholds the status line until the answer
+    /// is complete and so the same wait covers the entire generation.
     /// </remarks>
     [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.AggressiveInlining)]
-    private TimeSpan Budget(NimChatRequest request) =>
-        TimeSpan.FromSeconds(request.Stream ? Timeouts.ReadSeconds : Timeouts.CompletionSeconds);
+    private TimeSpan Budget(NimChatRequest request, ModelTier tier) =>
+        TimeSpan.FromSeconds(request.Stream ? Timeouts.ReadSecondsFor(tier) : Timeouts.CompletionSeconds);
 
     /// <summary>Issues one chat completion call, bounded by the deadline its shape calls for.</summary>
     /// <param name="request">The request to send.</param>
+    /// <param name="tier">The tier the turn was routed to, which a streamed call's bound may be overridden for.</param>
     /// <param name="maxAttempts">The attempt budget this call may spend on a dropped connection.</param>
     /// <param name="cancellationToken">Abandons the call when the client disconnects.</param>
     /// <returns>The upstream response, with headers received.</returns>
@@ -224,10 +230,11 @@ public sealed record NimClient(
     /// </remarks>
     private async ValueTask<HttpResponseMessage> SendAsync(
         NimChatRequest request,
+        ModelTier tier,
         int maxAttempts,
         CancellationToken cancellationToken)
     {
-        var budget = Budget(request);
+        var budget = Budget(request, tier);
 
         for (var attempt = 1; true; attempt++)
         {

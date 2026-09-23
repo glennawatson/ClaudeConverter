@@ -3,19 +3,20 @@
 // See the LICENSE file in the project root for full license information.
 using System.Runtime.CompilerServices;
 using ClaudeNim.Aot.Nvidia;
+using ClaudeNim.Aot.Routing;
 
 namespace ClaudeNim.Aot.Tests.Fakes;
 
 /// <summary>A hand-written <see cref="INimClient"/> double that never leaves the process.</summary>
 internal sealed class FakeNimClient : INimClient
 {
-    /// <summary>Gets or sets the responder invoked by <see cref="SendChatAsync(NimChatRequest, int, CancellationToken)"/>.</summary>
+    /// <summary>Gets or sets the responder invoked by <see cref="SendChatAsync(NimChatRequest, ModelTier, int, CancellationToken)"/>.</summary>
     public Func<NimChatRequest, HttpResponseMessage>? OnSendChat { get; set; }
 
     /// <summary>Gets or sets the responder invoked by <see cref="ListModelsAsync"/>.</summary>
     public Func<NimModelList?>? OnListModels { get; set; }
 
-    /// <summary>Gets the requests passed to <see cref="SendChatAsync(NimChatRequest, int, CancellationToken)"/>, in call order.</summary>
+    /// <summary>Gets the requests passed to <see cref="SendChatAsync(NimChatRequest, ModelTier, int, CancellationToken)"/>, in call order.</summary>
     public List<NimChatRequest> Requests { get; } = [];
 
     /// <summary>Gets the attempt budgets each call was given, in call order.</summary>
@@ -28,11 +29,11 @@ internal sealed class FakeNimClient : INimClient
 
     /// <inheritdoc/>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public ValueTask<HttpResponseMessage> SendChatAsync(NimChatRequest request, CancellationToken cancellationToken) =>
-        SendChatAsync(request, int.MaxValue, cancellationToken);
+    public ValueTask<HttpResponseMessage> SendChatAsync(NimChatRequest request, ModelTier tier, CancellationToken cancellationToken) =>
+        SendChatAsync(request, tier, int.MaxValue, cancellationToken);
 
     /// <inheritdoc/>
-    public ValueTask<HttpResponseMessage> SendChatAsync(NimChatRequest request, int maxAttempts, CancellationToken cancellationToken)
+    public ValueTask<HttpResponseMessage> SendChatAsync(NimChatRequest request, ModelTier tier, int maxAttempts, CancellationToken cancellationToken)
     {
         Requests.Add(request);
         Budgets.Add(maxAttempts);

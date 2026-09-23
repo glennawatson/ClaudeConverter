@@ -154,7 +154,7 @@ public static class ResponsesEndpointExtensions
 
         if (alternatives.Count == 0)
         {
-            return new(turn, await services.Client.SendChatAsync(turn.UpstreamRequest, cancellationToken).ConfigureAwait(false));
+            return new(turn, await services.Client.SendChatAsync(turn.UpstreamRequest, turn.Resolved.Tier, cancellationToken).ConfigureAwait(false));
         }
 
         var current = turn;
@@ -182,7 +182,7 @@ public static class ResponsesEndpointExtensions
 
         NvidiaLog.EveryModelUnavailable(services.Logger, turn.Resolved.NimModel, alternatives.Count + 1);
 
-        return new(turn, await services.Client.SendChatAsync(turn.UpstreamRequest, cancellationToken).ConfigureAwait(false));
+        return new(turn, await services.Client.SendChatAsync(turn.UpstreamRequest, turn.Resolved.Tier, cancellationToken).ConfigureAwait(false));
     }
 
     /// <summary>Makes one attempt at a turn, reporting an unavailable model as no answer at all.</summary>
@@ -199,7 +199,7 @@ public static class ResponsesEndpointExtensions
         try
         {
             response = await services.Client
-                .SendChatAsync(turn.UpstreamRequest, maxAttempts: 1, cancellationToken)
+                .SendChatAsync(turn.UpstreamRequest, turn.Resolved.Tier, maxAttempts: 1, cancellationToken)
                 .ConfigureAwait(false);
         }
         catch (Exception error) when (IsUpstreamTransportFailure(error) && !cancellationToken.IsCancellationRequested)
