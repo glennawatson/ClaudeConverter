@@ -1,17 +1,30 @@
 # ClaudeConverter
 
-An Anthropic Messages API compatibility layer, compiled ahead of time to a single native binary.
-Point Claude Code at it and the session runs on a different model provider underneath.
+A model-provider compatibility layer, compiled ahead of time to a single native binary. Point a
+coding agent at it and the session runs on a different model provider underneath, transparently.
 
-NVIDIA NIM is the first provider it speaks, and the transport is abstracted behind an interface so
-another one can be added without disturbing the Anthropic-facing side. It is a C# rewrite of the
-ideas in [cc-nim](https://github.com/diyism/cc-nim) and
+NVIDIA NIM is the only upstream provider it speaks, and the transport is abstracted behind an
+interface so another one can be added without disturbing either client-facing side. It is a C#
+rewrite of the ideas in [cc-nim](https://github.com/diyism/cc-nim) and
 [claude-nim](https://github.com/claude-server/claude-nim), both MIT licensed.
+
+Two client-facing wire formats are served on the same port, at the same time:
+
+| Client | Route | Wire format |
+|---|---|---|
+| [Claude Code](https://github.com/anthropics/claude-code) | `/v1/messages` | Anthropic Messages API |
+| [Codex CLI](https://github.com/openai/codex) | `/v1/responses` | OpenAI Responses API |
+
+[opencode](https://opencode.ai) needs no dedicated route: it can be configured as an Anthropic
+provider pointed at this proxy's own `/v1/messages`, and it just works — see
+[Connecting a client](#connecting-a-client) below.
 
 ## Scope
 
-NVIDIA NIM only, today. This is not a multi-provider router yet and does not pretend to be one —
-the abstraction exists so a second provider is an addition rather than a rewrite.
+NVIDIA NIM only, today, on the upstream side. This is not a multi-provider router yet and does not
+pretend to be one — the abstraction exists so a second upstream provider is an addition rather than
+a rewrite. On the client-facing side, Anthropic Messages and OpenAI Responses are both served now;
+a third wire format is the same kind of addition.
 
 ## Requirements
 
@@ -27,12 +40,176 @@ export NVIDIA_API_KEY="nvapi-..."
 ./src/ClaudeNim.Aot/bin/Release/net10.0/linux-x64/publish/ClaudeNim.Aot
 ```
 
-Then point Claude Code at it:
+Then point a client at it — see [Connecting a client](#connecting-a-client) below.
+
+## Running it in the background
+
+The binary is a plain, self-contained executable — it needs no runtime installed on the target
+machine, just the publish output copied over. These steps assume you already ran the `dotnet
+publish` command above (swap `linux-x64` for `osx-x64` or `osx-arm64` on a Mac) and have an NVIDIA
+API key.
+
+Windows service registration is planned for a future version and is out of scope here; on Windows,
+run the published `.exe` directly or under your own process manager for now.
+
+### Linux — systemd user service
+
+A user service runs as your own account, starts at login, and needs no root:
+
+```bash
+mkdir -p ~/.config/systemd/user
+mkdir -p ~/.local/opt/claudenim
+cp -r src/ClaudeNim.Aot/bin/Release/net10.0/linux-x64/publish/* ~/.local/opt/claudenim/
+
+cat > ~/.config/systemd/user/claudenim.service <<'EOF'
+[Unit]
+Description=ClaudeConverter proxy
+After=network-online.target
+
+[Service]
+Type=simple
+ExecStart=%h/.local/opt/claudenim/ClaudeNim.Aot
+Environment=NVIDIA_API_KEY=nvapi-...
+Environment=ANTHROPIC_AUTH_TOKEN=whatever-you-set
+Restart=on-failure
+RestartSec=2
+
+[Install]
+WantedBy=default.target
+EOF
+
+systemctl --user daemon-reload
+systemctl --user enable --now claudenim.service
+```
+
+`--enable` is what makes it start automatically; without it the unit only runs until the next
+reboot or logout. A user service normally stops when you log out — run
+`loginctl enable-linger "$USER"` once (as root, or via `sudo`) if you want it to keep running
+across logout and to start at boot, not just at login.
+
+Check on it with `systemctl --user status claudenim.service` and `journalctl --user -u claudenim
+-f`; the log lines are already shaped for the journal (see
+[Following a turn through the log](#following-a-turn-through-the-log)).
+
+### macOS — a launchd agent
+
+A `LaunchAgent` is the macOS equivalent: it runs as your user and starts at login.
+
+```bash
+mkdir -p ~/Library/Application\ Support/claudenim
+cp -r src/ClaudeNim.Aot/bin/Release/net10.0/osx-arm64/publish/* ~/Library/Application\ Support/claudenim/
+
+cat > ~/Library/LaunchAgents/com.claudenim.proxy.plist <<'EOF'
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.claudenim.proxy</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>__HOME__/Library/Application Support/claudenim/ClaudeNim.Aot</string>
+    </array>
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>NVIDIA_API_KEY</key>
+        <string>nvapi-...</string>
+        <key>ANTHROPIC_AUTH_TOKEN</key>
+        <string>whatever-you-set</string>
+    </dict>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <true/>
+    <key>StandardOutPath</key>
+    <string>__HOME__/Library/Logs/claudenim.log</string>
+    <key>StandardErrorPath</key>
+    <string>__HOME__/Library/Logs/claudenim.log</string>
+</dict>
+</plist>
+EOF
+sed -i '' "s|__HOME__|$HOME|g" ~/Library/LaunchAgents/com.claudenim.proxy.plist
+
+launchctl bootstrap "gui/$(id -u)" ~/Library/LaunchAgents/com.claudenim.proxy.plist
+```
+
+`RunAtLoad` plus `KeepAlive` is what gives you both autostart on login and a restart if the
+process dies; `bootstrap` starts it immediately without waiting for the next login. To stop and
+unregister it: `launchctl bootout "gui/$(id -u)" ~/Library/LaunchAgents/com.claudenim.proxy.plist`.
+Logs land in `~/Library/Logs/claudenim.log`, since launchd does not hand its children to a
+structured log store the way systemd does.
+
+### Other Unix, or no service manager
+
+Anywhere else, the binary is still just a binary — run it under `nohup`, `tmux`/`screen`, or
+whatever process supervisor (`supervisord`, `runit`, a container) your platform already uses, and
+add it to `crontab -e` as `@reboot` if you want it to survive a reboot without a proper service
+manager:
+
+```bash
+@reboot NVIDIA_API_KEY=nvapi-... ANTHROPIC_AUTH_TOKEN=whatever-you-set /path/to/ClaudeNim.Aot
+```
+
+## Connecting a client
+
+Every example assumes the proxy is reachable at `http://localhost:5000` and that
+`Authentication:AuthToken` is set to some shared secret (leaving it empty disables the check
+entirely, which is only safe on a loopback binding — see [Configuration](#configuration)).
+
+### Claude Code
 
 ```bash
 export ANTHROPIC_BASE_URL="http://localhost:5000"
 export ANTHROPIC_AUTH_TOKEN="whatever-you-set-in-Authentication:AuthToken"
 claude
+```
+
+### Codex CLI
+
+Codex CLI only speaks the OpenAI Responses API (`wire_api = "responses"`; Chat Completions was
+dropped as a Codex target). Add a custom model provider to `~/.codex/config.toml`:
+
+```toml
+[model_providers.claudenim]
+name = "ClaudeConverter"
+base_url = "http://localhost:5000/v1"
+env_key = "CLAUDENIM_AUTH_TOKEN"
+wire_api = "responses"
+
+[profiles.claudenim]
+model_provider = "claudenim"
+model = "gpt-5.1-codex"
+```
+
+```bash
+export CLAUDENIM_AUTH_TOKEN="whatever-you-set-in-Authentication:AuthToken"
+codex --profile claudenim
+```
+
+The `model` you name is whatever the client sends — it is not looked up against NVIDIA's catalogue,
+so any label works as long as your NIM credential can reach a model that makes sense for it.
+
+### opencode
+
+opencode's provider config accepts a custom `baseURL` for the Anthropic SDK package directly, so
+it can talk to this proxy's existing `/v1/messages` route with no dedicated Responses-side work —
+add this to `opencode.json`:
+
+```json
+{
+  "provider": {
+    "claudenim": {
+      "npm": "@ai-sdk/anthropic",
+      "options": {
+        "baseURL": "http://localhost:5000",
+        "apiKey": "whatever-you-set-in-Authentication:AuthToken"
+      },
+      "models": {
+        "claude-sonnet-5": {}
+      }
+    }
+  }
+}
 ```
 
 ## Configuration
@@ -212,10 +389,11 @@ fix.
 
 | Route | Notes |
 |---|---|
-| `POST /v1/messages` | Streaming and non-streaming, tools, reasoning, vision |
+| `POST /v1/messages` | Anthropic Messages API — streaming and non-streaming, tools, reasoning, vision |
 | `POST /v1/messages/count_tokens` | Answered locally; NIM exposes no tokenizer |
 | `GET /v1/models` | Paginated with `before_id`, `after_id`, `limit` |
 | `GET /v1/models/{id}` | Single model, including its capabilities |
+| `POST /v1/responses` | OpenAI Responses API — streaming and non-streaming, tools, reasoning, vision |
 | `GET /health` | Unauthenticated; reports how many models are reachable |
 | `GET /health/live` | Liveness only |
 
