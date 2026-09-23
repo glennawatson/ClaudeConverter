@@ -310,23 +310,27 @@ internal static partial class NvidiaLog
     /// <param name="upstreamCode">The status the upstream gave, or 0 when it gave none.</param>
     /// <param name="upstreamType">The upstream's own classification, or "none" when it gave none.</param>
     /// <param name="reportedType">The Anthropic error class the client was given.</param>
+    /// <param name="body">The raw upstream error payload, truncated.</param>
     /// <remarks>
     /// The reason alone does not say what the client was told, and the client acts on that rather
     /// than on the prose — a turn reported as <c>overloaded_error</c> is retried where the same
     /// text as <c>api_error</c> ends the work. Both ends of the translation are recorded so the
-    /// two can be told apart without reproducing the failure.
+    /// two can be told apart without reproducing the failure. The raw body is included too, since
+    /// <paramref name="reason"/> is only the <c>message</c> field this proxy happens to parse out
+    /// of it — a field NVIDIA adds later would otherwise never reach the log at all.
     /// </remarks>
     [LoggerMessage(
         EventId = 1007,
         Level = LogLevel.Warning,
-        Message = "NIM ended a streamed turn on {Model} with a failure (upstream status {UpstreamCode}, type {UpstreamType}; reported to the client as {ReportedType}): {Reason}")]
+        Message = "NIM ended a streamed turn on {Model} with a failure (status {UpstreamCode}, type {UpstreamType}; reported as {ReportedType}): {Reason} Upstream said: {Body}")]
     internal static partial void StreamFailed(
         ILogger logger,
         string model,
         string reason,
         int upstreamCode,
         string upstreamType,
-        string reportedType);
+        string reportedType,
+        string body);
 
     /// <summary>Records how much a streamed turn produced, once it has ended.</summary>
     /// <param name="logger">The log to write to.</param>

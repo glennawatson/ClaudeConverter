@@ -164,6 +164,35 @@ public sealed class NimStreamTranslatorTests
         await Assert.That(body).DoesNotContain("message_stop");
     }
 
+    /// <summary>A failure reported mid-stream is logged with the raw upstream payload, not just the parsed message.</summary>
+    /// <returns>A task that completes when the assertions have run.</returns>
+    /// <remarks>
+    /// The parsed message is only the one field this proxy happens to read out of the payload; the
+    /// raw line is what still shows a field NVIDIA adds later, without reproducing the failure.
+    /// </remarks>
+    [Test]
+    public async Task MidStreamFailureIsLoggedWithTheRawUpstreamPayload()
+    {
+        const string Sse = """
+            data: {"choices":[{"delta":{"content":"partial"}}]}
+
+            data: {"error":{"message":"upstream died","code":503,"request_id":"req-XYZ789"}}
+
+            data: [DONE]
+
+            """;
+
+        var logger = await TranslateCapturingAsync(Sse);
+
+        var failed = logger.Entries.Find(static entry => entry.Message.Contains("ended a streamed turn", StringComparison.Ordinal));
+
+        await Assert.That(failed.Message).IsNotNull();
+
+        // "request_id" is not one of NimStreamError's own parsed fields, so its presence in the log
+        // proves the raw payload was logged, not just the fields this proxy happens to read out of it.
+        await Assert.That(failed.Message).Contains("req-XYZ789");
+    }
+
     /// <summary>A malformed chunk is skipped without ending the turn.</summary>
     /// <returns>A task that completes when the assertions have run.</returns>
     [Test]

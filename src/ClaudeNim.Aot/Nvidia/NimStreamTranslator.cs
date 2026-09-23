@@ -241,7 +241,7 @@ public sealed class NimStreamTranslator(
             }
             else
             {
-                LogStreamFailure(new(error.Message));
+                LogStreamFailure(new(error.Message), rawLine: string.Empty);
             }
 
             _failure = new(
@@ -291,7 +291,7 @@ public sealed class NimStreamTranslator(
         // having nothing to say.
         if (chunk.Error is { } failure)
         {
-            LogStreamFailure(failure);
+            LogStreamFailure(failure, line);
             _failure = failure;
 
             // Held while nothing has been written: the caller may ask for the turn again, and a
@@ -310,15 +310,17 @@ public sealed class NimStreamTranslator(
 
     /// <summary>Records a mid-stream failure alongside what the client was told about it.</summary>
     /// <param name="failure">The failure the upstream reported.</param>
+    /// <param name="rawLine">The raw line the failure was parsed from.</param>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private void LogStreamFailure(NimStreamError failure) =>
+    private void LogStreamFailure(NimStreamError failure, string rawLine) =>
         NvidiaLog.StreamFailed(
             logger,
             nimModel,
             failure.Message ?? string.Empty,
             failure.Code ?? 0,
             failure.Type ?? "none",
-            StreamErrorTypes.FromUpstream(failure));
+            StreamErrorTypes.FromUpstream(failure),
+            Clipped(rawLine));
 
     /// <summary>Writes the event that reports an upstream failure to the client.</summary>
     /// <param name="failure">The failure the upstream reported.</param>

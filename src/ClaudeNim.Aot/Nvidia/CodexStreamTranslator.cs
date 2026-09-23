@@ -195,6 +195,12 @@ public sealed class CodexStreamTranslator(
     private static bool IsUpstreamTransportFailure(Exception error) =>
         error is HttpRequestException or OperationCanceledException or IOException;
 
+    /// <summary>Clips a payload so one log line stays a line rather than a dump of the whole chunk.</summary>
+    /// <param name="payload">The payload to clip.</param>
+    /// <returns>The payload, no longer than <see cref="LoggedPayloadLength"/>.</returns>
+    private static string Clipped(string payload) =>
+        payload.Length <= LoggedPayloadLength ? payload : payload[..LoggedPayloadLength];
+
     /// <summary>Reads and consumes every line of the upstream body, surfacing a transport failure as an error event.</summary>
     /// <param name="reader">The reader positioned on the upstream body.</param>
     /// <param name="idle">The linked source the idle timeout is applied through.</param>
@@ -224,7 +230,7 @@ public sealed class CodexStreamTranslator(
             }
             else
             {
-                LogStreamFailure(new(error.Message));
+                LogStreamFailure(new(error.Message), rawLine: string.Empty);
             }
 
             _failure = new(
@@ -271,7 +277,7 @@ public sealed class CodexStreamTranslator(
 
         if (chunk.Error is { } failure)
         {
-            LogStreamFailure(failure);
+            LogStreamFailure(failure, line);
             _failure = failure;
 
             if (Volatile.Read(ref _started) == Committed)
@@ -288,15 +294,17 @@ public sealed class CodexStreamTranslator(
 
     /// <summary>Records a mid-stream failure alongside what the client was told about it.</summary>
     /// <param name="failure">The failure the upstream reported.</param>
+    /// <param name="rawLine">The raw line the failure was parsed from.</param>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private void LogStreamFailure(NimStreamError failure) =>
+    private void LogStreamFailure(NimStreamError failure, string rawLine) =>
         NvidiaLog.StreamFailed(
             logger,
             nimModel,
             failure.Message ?? string.Empty,
             failure.Code ?? 0,
             failure.Type ?? "none",
-            StreamErrorTypes.FromUpstream(failure));
+            StreamErrorTypes.FromUpstream(failure),
+            Clipped(rawLine));
 
     /// <summary>Writes the error event for an upstream failure.</summary>
     /// <param name="failure">The failure the upstream reported.</param>
