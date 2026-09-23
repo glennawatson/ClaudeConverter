@@ -135,13 +135,14 @@ public static class ResponsesEndpointExtensions
     private static CodexTurnContext Route(ResponsesRequest request, string responseId, CodexServices services)
     {
         var resolved = services.Router.Resolve(request.Model);
+        var bareModel = UpstreamModelId.Parse(resolved.NimModel).Model;
 
         return new(
             request,
             CodexRequestBuilder.Build(
                 request,
-                UpstreamModelId.Parse(resolved.NimModel).Model,
-                resolved.ThinkingEnabled,
+                bareModel,
+                resolved.ThinkingEnabled && !NimModelCatalogDefaults.IsKnownToRejectThinking(bareModel),
                 services.Nim,
                 services.Catalog.DefaultMaxOutputTokens),
             resolved,
@@ -331,14 +332,15 @@ public static class ResponsesEndpointExtensions
         IReadOnlyList<string> remaining)
     {
         var resolved = turn.Resolved with { NimModel = next, Fallbacks = remaining };
+        var bareModel = UpstreamModelId.Parse(next).Model;
 
         return turn with
         {
             Resolved = resolved,
             UpstreamRequest = CodexRequestBuilder.Build(
                 turn.Request,
-                UpstreamModelId.Parse(next).Model,
-                resolved.ThinkingEnabled,
+                bareModel,
+                resolved.ThinkingEnabled && !NimModelCatalogDefaults.IsKnownToRejectThinking(bareModel),
                 services.Nim,
                 services.Catalog.DefaultMaxOutputTokens),
         };

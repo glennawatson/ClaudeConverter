@@ -45,6 +45,9 @@ public sealed class MessagesEndpointExtensionsTests
     /// <summary>The model the fallback fixtures configure as the tier's alternative.</summary>
     private const string FallbackModel = "nvidia/nemotron-3.5-lightning-30b-a3b";
 
+    /// <summary>A model the catalogue profiles as known to reject the reasoning controls.</summary>
+    private const string ThinkingRejectingModel = "deepseek-ai/deepseek-v4.1-flash";
+
     /// <summary>The number of upstream calls a turn takes when its first model steps aside for one fallback.</summary>
     private const int CallsAfterOneFallback = 2;
 
@@ -398,6 +401,43 @@ public sealed class MessagesEndpointExtensionsTests
         var fellBack = logger.Entries.Find(static entry => entry.Message.Contains(UpstreamDetail, StringComparison.Ordinal));
 
         await Assert.That(fellBack.Message).IsNotNull();
+    }
+
+    /// <summary>A fallback candidate known to reject the reasoning controls is never asked with them.</summary>
+    /// <returns>A task that completes when the assertions have run.</returns>
+    /// <remarks>
+    /// This is the proactive half of the reasoning-controls story: the downgrade ladder still
+    /// recovers a turn that asks an unlisted model and gets refused, but a model this proxy has
+    /// already watched refuse them on every attempt is not worth asking with them again — that
+    /// only spends a round trip on a rejection the catalogue already knows is coming.
+    /// </remarks>
+    [Test]
+    public async Task FallbackKnownToRejectThinkingIsAskedWithoutReasoningControls()
+    {
+        var completion = new NimChatCompletion(
+            Choices: [new NimChoice(Message: new NimChatMessage(AssistantRole, NimContent.FromText(ServedResponseText)))]);
+
+        var client = new FakeNimClient
+        {
+            OnSendChat = request => request.Model == UpstreamModel
+                ? new HttpResponseMessage(HttpStatusCode.ServiceUnavailable)
+                : JsonResponse(HttpStatusCode.OK, completion),
+        };
+
+        List<AnthropicMessage> messages = [new(AnthropicMessage.UserRole, MessageContent.FromText(OrdinaryUserText))];
+        var request = new MessagesRequest(ClaudeModel, messages, OrdinaryMaxTokens);
+
+        _ = await MessagesEndpointExtensions.SendMessageAsync(
+            request,
+            Context(),
+            Services(client, ThinkingRejectingModel),
+            CancellationToken.None);
+
+        await Assert.That(client.Requests.Count).IsEqualTo(CallsAfterOneFallback);
+        await Assert.That(client.Requests[1].Model).IsEqualTo(ThinkingRejectingModel);
+        await Assert.That(client.Requests[1].ChatTemplateKwargs).IsNull();
+        await Assert.That(client.Requests[1].ReasoningEffort).IsNull();
+        await Assert.That(client.Requests[1].Extensions).IsNull();
     }
 
     /// <summary>Walking the chain spends one attempt a model, not the whole retry budget.</summary>

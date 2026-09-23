@@ -312,6 +312,12 @@ retried once without it, and if a model rejects replayed `reasoning_content` on 
 trace is stripped from history so the conversation keeps going rather than failing on every
 subsequent turn.
 
+A model this proxy has already watched reject the controls on every attempt skips that round trip
+entirely: its catalogue profile is marked `SupportsThinking: false`, and a turn routed or
+fallen-back to it is never sent the controls in the first place. An unlisted model still gets them
+by default — reacting to a rejection is the right behaviour for a model this proxy has no stated
+knowledge of, and only a model with an actual track record of refusing them is worth never asking.
+
 ### Reliability
 
 The pooled HTTP client carries no fixed timeout, because a single bound cannot fit both shapes of

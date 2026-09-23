@@ -158,6 +158,19 @@ public static class NimModelCatalogDefaults
     /// </remarks>
     public static bool SupportsThinking(string id) => FindProfile(id)?.SupportsThinking ?? false;
 
+    /// <summary>Decides whether a model is known, specifically, to reject the reasoning controls.</summary>
+    /// <param name="id">The NIM model identifier.</param>
+    /// <returns><see langword="true"/> only when a profile exists and states it does not reason.</returns>
+    /// <remarks>
+    /// Deliberately not the negation of <see cref="SupportsThinking"/>: that treats an unlisted
+    /// model the same as one known to refuse reasoning, which is right for a listing — a model this
+    /// proxy has no stated knowledge of should not claim a capability — but wrong for deciding
+    /// whether to send the controls at all. Sending them to an unlisted model and reacting if NVIDIA
+    /// refuses is still the right default; only a model this proxy has already watched reject them
+    /// on every attempt is worth never asking in the first place.
+    /// </remarks>
+    public static bool IsKnownToRejectThinking(string id) => FindProfile(id) is { SupportsThinking: false };
+
     /// <summary>Reads the output ceiling a model is documented to allow.</summary>
     /// <param name="id">The NIM model identifier.</param>
     /// <param name="fallback">The ceiling to assume for a model NVIDIA does not size.</param>

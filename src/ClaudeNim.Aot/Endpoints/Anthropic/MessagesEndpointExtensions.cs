@@ -152,13 +152,14 @@ public static class MessagesEndpointExtensions
     private static TurnContext Route(MessagesRequest request, string messageId, MessageServices services)
     {
         var resolved = WithoutReasoningForMachines(services.Router.Resolve(request.Model), request);
+        var bareModel = UpstreamModelId.Parse(resolved.NimModel).Model;
 
         return new(
             request,
             NimRequestBuilder.Build(
                 request,
-                UpstreamModelId.Parse(resolved.NimModel).Model,
-                resolved.ThinkingEnabled,
+                bareModel,
+                resolved.ThinkingEnabled && !NimModelCatalogDefaults.IsKnownToRejectThinking(bareModel),
                 services.Nim,
                 services.Catalog.DefaultMaxOutputTokens),
             resolved,
@@ -376,14 +377,15 @@ public static class MessagesEndpointExtensions
         IReadOnlyList<string> remaining)
     {
         var resolved = turn.Resolved with { NimModel = next, Fallbacks = remaining };
+        var bareModel = UpstreamModelId.Parse(next).Model;
 
         return turn with
         {
             Resolved = resolved,
             UpstreamRequest = NimRequestBuilder.Build(
                 turn.Request,
-                UpstreamModelId.Parse(next).Model,
-                resolved.ThinkingEnabled,
+                bareModel,
+                resolved.ThinkingEnabled && !NimModelCatalogDefaults.IsKnownToRejectThinking(bareModel),
                 services.Nim,
                 services.Catalog.DefaultMaxOutputTokens),
         };
