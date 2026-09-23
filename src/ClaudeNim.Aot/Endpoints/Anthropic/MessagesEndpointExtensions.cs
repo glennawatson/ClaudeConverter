@@ -157,7 +157,7 @@ public static class MessagesEndpointExtensions
             request,
             NimRequestBuilder.Build(
                 request,
-                resolved.NimModel,
+                UpstreamModelId.Parse(resolved.NimModel).Model,
                 resolved.ThinkingEnabled,
                 services.Nim,
                 services.Catalog.DefaultMaxOutputTokens),
@@ -252,7 +252,7 @@ public static class MessagesEndpointExtensions
     /// <returns>The upstream response.</returns>
     private static async Task<HttpResponseMessage> SendDirectAsync(TurnContext turn, MessageServices services, CancellationToken cancellationToken)
     {
-        var response = await services.Client.SendChatAsync(turn.UpstreamRequest, turn.Resolved.Tier, cancellationToken).ConfigureAwait(false);
+        var response = await SendUpstreamAsync(turn, services, services.Retries.MaxAttempts, cancellationToken).ConfigureAwait(false);
 
         if (response.IsSuccessStatusCode)
         {
@@ -269,6 +269,34 @@ public static class MessagesEndpointExtensions
         }
 
         return response;
+    }
+
+    /// <summary>Dispatches a call to whichever transport the turn's model identifier names.</summary>
+    /// <param name="turn">The turn to send.</param>
+    /// <param name="services">The services the turn is served from.</param>
+    /// <param name="maxAttempts">The attempt budget a NIM call may spend on a dropped connection.</param>
+    /// <param name="cancellationToken">Abandons the call when the client disconnects.</param>
+    /// <returns>The upstream response.</returns>
+    /// <remarks>
+    /// This is the one place a model identifier's provider prefix is read to decide where a call
+    /// actually goes; everywhere else, a turn just carries a string. Ollama and an OpenAI-compatible
+    /// endpoint take no attempt budget of their own — neither has NIM's retry ladder — so it is only
+    /// meaningful on the NIM branch.
+    /// </remarks>
+    private static Task<HttpResponseMessage> SendUpstreamAsync(
+        TurnContext turn,
+        MessageServices services,
+        int maxAttempts,
+        CancellationToken cancellationToken)
+    {
+        var parsed = UpstreamModelId.Parse(turn.Resolved.NimModel);
+
+        return parsed.Provider switch
+        {
+            UpstreamProvider.Ollama => services.OllamaClient.SendChatAsync(turn.UpstreamRequest, cancellationToken),
+            UpstreamProvider.OpenAi => services.OpenAiClient.SendChatAsync(turn.UpstreamRequest, cancellationToken),
+            _ => services.Client.SendChatAsync(turn.UpstreamRequest, turn.Resolved.Tier, maxAttempts, cancellationToken).AsTask(),
+        };
     }
 
     /// <summary>Makes one attempt at a turn, reporting an unavailable model as no answer at all.</summary>
@@ -296,9 +324,7 @@ public static class MessagesEndpointExtensions
         HttpResponseMessage response;
         try
         {
-            response = await services.Client
-                .SendChatAsync(turn.UpstreamRequest, turn.Resolved.Tier, maxAttempts: 1, cancellationToken)
-                .ConfigureAwait(false);
+            response = await SendUpstreamAsync(turn, services, maxAttempts: 1, cancellationToken).ConfigureAwait(false);
         }
         catch (Exception error) when (IsUpstreamTransportFailure(error) && !cancellationToken.IsCancellationRequested)
         {
@@ -356,7 +382,7 @@ public static class MessagesEndpointExtensions
             Resolved = resolved,
             UpstreamRequest = NimRequestBuilder.Build(
                 turn.Request,
-                next,
+                UpstreamModelId.Parse(next).Model,
                 resolved.ThinkingEnabled,
                 services.Nim,
                 services.Catalog.DefaultMaxOutputTokens),

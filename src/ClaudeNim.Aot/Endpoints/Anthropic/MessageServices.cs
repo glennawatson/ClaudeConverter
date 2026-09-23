@@ -21,6 +21,8 @@ namespace ClaudeNim.Aot.Endpoints.Anthropic;
 /// <param name="StreamTranslatorFactory">Builds the translator each streamed attempt is served through.</param>
 /// <param name="ModelHealth">Tracks which models are cooling down, so a fallback chain can skip them.</param>
 /// <param name="Timeouts">The configured upstream timeouts.</param>
+/// <param name="OllamaClient">The transport a model addressed with the <c>ollama:</c> prefix resolves to.</param>
+/// <param name="OpenAiClient">The transport a model addressed with the <c>openai:</c>/<c>azure:</c> prefix resolves to.</param>
 /// <param name="Time">The clock a re-issued streamed turn's backoff is measured against.</param>
 /// <param name="Logger">The diagnostic log.</param>
 /// <remarks>
@@ -40,5 +42,7 @@ public sealed record MessageServices(
     IStreamTranslatorFactory StreamTranslatorFactory,
     IModelHealthTracker ModelHealth,
     HttpTimeoutOptions Timeouts,
+    IOpenAiCompatibleClient OllamaClient,
+    IOpenAiCompatibleClient OpenAiClient,
     TimeProvider Time,
     ILogger<MessageServices> Logger);

@@ -163,6 +163,8 @@ public sealed class ResponsesEndpointExtensionsTests
             new ResponsesStreamTranslatorFactory(TimeProvider.System),
             new ModelHealthTracker(new ModelHealthOptions(), TimeProvider.System),
             new HttpTimeoutOptions(),
+            new FakeOpenAiCompatibleClient(),
+            new FakeOpenAiCompatibleClient(),
             TimeProvider.System,
             NullLogger<CodexServices>.Instance);
 

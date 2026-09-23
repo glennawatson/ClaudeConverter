@@ -12,6 +12,7 @@ using ClaudeNim.Aot.Serialization;
 using Microsoft.AspNetCore.Http.Json;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 using Refit;
 using CodexEndpoints = ClaudeNim.Aot.Endpoints.Codex;
 
@@ -65,13 +66,70 @@ public static class ProxyServiceExtensions
             ArgumentNullException.ThrowIfNull(services);
             ArgumentNullException.ThrowIfNull(configuration);
 
+            var (nim, timeouts, ollama, openAi) = services.AddOptions(configuration);
+
+            _ = services.AddSingleton(TimeProvider.System);
+            _ = services.AddSingleton<IModelRouter, ModelRouter>();
+            _ = services.AddSingleton<IRequestGate, RequestGate>();
+            _ = services.AddSingleton<IRequestPacer, RequestPacer>();
+            _ = services.AddSingleton<INimClient, NimClient>();
+            _ = services.AddSingleton<INimModelCatalog, NimModelCatalog>();
+            _ = services.AddSingleton<IModelHealthTracker, ModelHealthTracker>();
+
+            // Two independently-configured instances of the same wire shape, which is why each
+            // gets its own concrete registration rather than being registered behind
+            // IOpenAiCompatibleClient directly: a container resolves one instance per interface
+            // type, and MessageServices/CodexServices need both by name, not whichever won last.
+            _ = services.AddSingleton(sp => new OllamaClient(sp.GetRequiredService<IOllamaApi>(), ollama));
+            _ = services.AddSingleton(sp => new OpenAiClient(sp.GetRequiredService<IOpenAiApi>(), openAi));
+
+            // Each protocol registers its own IRequestOptimizer (or none, if it has no housekeeping
+            // traffic worth recognising), ICompletionTranslator and IStreamTranslatorFactory behind
+            // that protocol's own interfaces — the two share nothing beyond both translating out of
+            // the same Nim* wire types, which is why both sets carry the same interface names in
+            // different namespaces rather than one shared abstraction.
+            _ = services.AddSingleton<IRequestOptimizer, AnthropicRequestOptimizer>();
+            _ = services.AddSingleton<ICompletionTranslator, AnthropicCompletionTranslator>();
+            _ = services.AddSingleton<IStreamTranslatorFactory, AnthropicStreamTranslatorFactory>();
+            _ = services.AddSingleton(BuildMessageServices);
+
+            _ = services.AddSingleton<CodexEndpoints.ICompletionTranslator, CodexEndpoints.ResponsesCompletionTranslator>();
+            _ = services.AddSingleton<CodexEndpoints.IStreamTranslatorFactory, CodexEndpoints.ResponsesStreamTranslatorFactory>();
+            _ = services.AddSingleton(BuildCodexServices);
+
+            _ = services.AddSingleton<ProxyAuthenticationFilter>();
+
+            return services.AddNimTransport(nim, timeouts).AddOpenAiCompatibleTransports(ollama, openAi);
+        }
+
+        /// <summary>Binds and registers every configuration section the proxy is assembled from.</summary>
+        /// <param name="configuration">The bound configuration.</param>
+        /// <returns>The settings the transport registrations need directly.</returns>
+        private (NvidiaNimOptions Nim, HttpTimeoutOptions Timeouts, OllamaOptions Ollama, OpenAiCompatibleOptions OpenAi) AddOptions(IConfiguration configuration)
+        {
             var nim = configuration.GetSection(NvidiaNimOptions.SectionName).Get<NvidiaNimOptions>()
                 ?? new NvidiaNimOptions();
             var timeouts = configuration.GetSection(HttpTimeoutOptions.SectionName).Get<HttpTimeoutOptions>()
                 ?? new HttpTimeoutOptions();
+            var ollama = configuration.GetSection(OllamaOptions.SectionName).Get<OllamaOptions>()
+                ?? new OllamaOptions();
+            var openAi = configuration.GetSection(OpenAiCompatibleOptions.SectionName).Get<OpenAiCompatibleOptions>()
+                ?? new OpenAiCompatibleOptions();
 
             _ = services.AddSingleton(nim);
             _ = services.AddSingleton(timeouts);
+            _ = services.AddSingleton(ollama);
+            _ = services.AddSingleton(openAi);
+            _ = services.AddRemainingOptions(configuration);
+
+            return (nim, timeouts, ollama, openAi);
+        }
+
+        /// <summary>Binds and registers every configuration section not needed directly by a transport registration.</summary>
+        /// <param name="configuration">The bound configuration.</param>
+        /// <returns>The same container, so calls can be chained.</returns>
+        private IServiceCollection AddRemainingOptions(IConfiguration configuration)
+        {
             _ = services.AddSingleton(
                 configuration.GetSection(ModelRoutingOptions.SectionName).Get<ModelRoutingOptions>()
                 ?? new ModelRoutingOptions());
@@ -94,31 +152,7 @@ public static class ProxyServiceExtensions
                 configuration.GetSection(ModelHealthOptions.SectionName).Get<ModelHealthOptions>()
                 ?? new ModelHealthOptions());
 
-            _ = services.AddSingleton(TimeProvider.System);
-            _ = services.AddSingleton<IModelRouter, ModelRouter>();
-            _ = services.AddSingleton<IRequestGate, RequestGate>();
-            _ = services.AddSingleton<IRequestPacer, RequestPacer>();
-            _ = services.AddSingleton<INimClient, NimClient>();
-            _ = services.AddSingleton<INimModelCatalog, NimModelCatalog>();
-            _ = services.AddSingleton<IModelHealthTracker, ModelHealthTracker>();
-
-            // Each protocol registers its own IRequestOptimizer (or none, if it has no housekeeping
-            // traffic worth recognising), ICompletionTranslator and IStreamTranslatorFactory behind
-            // that protocol's own interfaces — the two share nothing beyond both translating out of
-            // the same Nim* wire types, which is why both sets carry the same interface names in
-            // different namespaces rather than one shared abstraction.
-            _ = services.AddSingleton<IRequestOptimizer, AnthropicRequestOptimizer>();
-            _ = services.AddSingleton<ICompletionTranslator, AnthropicCompletionTranslator>();
-            _ = services.AddSingleton<IStreamTranslatorFactory, AnthropicStreamTranslatorFactory>();
-            _ = services.AddSingleton<MessageServices>();
-
-            _ = services.AddSingleton<CodexEndpoints.ICompletionTranslator, CodexEndpoints.ResponsesCompletionTranslator>();
-            _ = services.AddSingleton<CodexEndpoints.IStreamTranslatorFactory, CodexEndpoints.ResponsesStreamTranslatorFactory>();
-            _ = services.AddSingleton<CodexEndpoints.CodexServices>();
-
-            _ = services.AddSingleton<ProxyAuthenticationFilter>();
-
-            return services.AddNimTransport(nim, timeouts);
+            return services;
         }
 
         /// <summary>Registers the generated Refit surface and the connection it runs over.</summary>
@@ -146,6 +180,42 @@ public static class ProxyServiceExtensions
 
             return services;
         }
+
+        /// <summary>Registers the generated Refit surfaces Ollama and an OpenAI-compatible endpoint are reached through.</summary>
+        /// <param name="ollama">The configured local Ollama settings.</param>
+        /// <param name="openAi">The configured hosted OpenAI-compatible settings.</param>
+        /// <returns>The same container, so calls can be chained.</returns>
+        /// <remarks>
+        /// Both are registered unconditionally, whether or not their provider is enabled: a Refit
+        /// typed client is cheap to wire up, and <see cref="OllamaClient"/>/<see cref="OpenAiClient"/>
+        /// are what actually decide whether a call is ever attempted.
+        /// </remarks>
+        private IServiceCollection AddOpenAiCompatibleTransports(OllamaOptions ollama, OpenAiCompatibleOptions openAi)
+        {
+            _ = services
+                .AddRefitGeneratedClient<IOllamaApi>(ProxyJsonContext.Default, static _ => TransportSettings)
+                .ConfigureHttpClient(client =>
+                {
+                    client.BaseAddress = new(BaseAddressOf(ollama.BaseUrl));
+                    client.Timeout = Timeout.InfiniteTimeSpan;
+                })
+                .AddAuthorizationHeaderValueProvider(static (provider, _, _) =>
+                    ValueTask.FromResult(provider.GetRequiredService<OllamaOptions>().ApiKey))
+                .ConfigurePrimaryHttpMessageHandler(static () => new SocketsHttpHandler { PooledConnectionLifetime = ConnectionLifetime });
+
+            _ = services
+                .AddRefitGeneratedClient<IOpenAiApi>(ProxyJsonContext.Default, static _ => TransportSettings)
+                .ConfigureHttpClient(client =>
+                {
+                    client.BaseAddress = new(BaseAddressOf(openAi.BaseUrl));
+                    client.Timeout = Timeout.InfiniteTimeSpan;
+                })
+                .AddAuthorizationHeaderValueProvider(static (provider, _, _) =>
+                    ValueTask.FromResult(provider.GetRequiredService<OpenAiCompatibleOptions>().ApiKey))
+                .ConfigurePrimaryHttpMessageHandler(static () => new SocketsHttpHandler { PooledConnectionLifetime = ConnectionLifetime });
+
+            return services;
+        }
     }
 
     /// <summary>Points minimal API's own JSON serialization at the proxy's generated context.</summary>
@@ -160,6 +230,45 @@ public static class ProxyServiceExtensions
         ArgumentNullException.ThrowIfNull(options);
         options.SerializerOptions.TypeInfoResolverChain.Insert(0, ProxyJsonContext.Default);
     }
+
+    /// <summary>Builds the services one Messages API turn is served from.</summary>
+    /// <param name="provider">The container every dependency is resolved from.</param>
+    /// <returns>The assembled services.</returns>
+    private static MessageServices BuildMessageServices(IServiceProvider provider) => new(
+        provider.GetRequiredService<IModelRouter>(),
+        provider.GetRequiredService<INimClient>(),
+        provider.GetRequiredService<IRequestGate>(),
+        provider.GetRequiredService<NvidiaNimOptions>(),
+        provider.GetRequiredService<RetryOptions>(),
+        provider.GetRequiredService<ModelCatalogOptions>(),
+        provider.GetRequiredService<IRequestOptimizer>(),
+        provider.GetRequiredService<ICompletionTranslator>(),
+        provider.GetRequiredService<IStreamTranslatorFactory>(),
+        provider.GetRequiredService<IModelHealthTracker>(),
+        provider.GetRequiredService<HttpTimeoutOptions>(),
+        provider.GetRequiredService<OllamaClient>(),
+        provider.GetRequiredService<OpenAiClient>(),
+        provider.GetRequiredService<TimeProvider>(),
+        provider.GetRequiredService<ILogger<MessageServices>>());
+
+    /// <summary>Builds the services one Responses API turn is served from.</summary>
+    /// <param name="provider">The container every dependency is resolved from.</param>
+    /// <returns>The assembled services.</returns>
+    private static CodexEndpoints.CodexServices BuildCodexServices(IServiceProvider provider) => new(
+        provider.GetRequiredService<IModelRouter>(),
+        provider.GetRequiredService<INimClient>(),
+        provider.GetRequiredService<IRequestGate>(),
+        provider.GetRequiredService<NvidiaNimOptions>(),
+        provider.GetRequiredService<RetryOptions>(),
+        provider.GetRequiredService<ModelCatalogOptions>(),
+        provider.GetRequiredService<CodexEndpoints.ICompletionTranslator>(),
+        provider.GetRequiredService<CodexEndpoints.IStreamTranslatorFactory>(),
+        provider.GetRequiredService<IModelHealthTracker>(),
+        provider.GetRequiredService<HttpTimeoutOptions>(),
+        provider.GetRequiredService<OllamaClient>(),
+        provider.GetRequiredService<OpenAiClient>(),
+        provider.GetRequiredService<TimeProvider>(),
+        provider.GetRequiredService<ILogger<CodexEndpoints.CodexServices>>());
 
     /// <summary>Builds the settings the generated transport resolves and serializes with.</summary>
     /// <returns>The settings.</returns>
@@ -200,4 +309,16 @@ public static class ProxyServiceExtensions
         var value = string.IsNullOrWhiteSpace(baseUrl) ? NvidiaNimOptions.DefaultBaseUrl : baseUrl;
         return value.EndsWith('/') ? value : $"{value}/";
     }
+
+    /// <summary>Normalises a provider's base address, for a provider with no sensible default of its own.</summary>
+    /// <param name="baseUrl">The configured base address.</param>
+    /// <returns>The address with a trailing separator, or a harmless placeholder when left blank.</returns>
+    /// <remarks>
+    /// A blank base address is the normal starting state for a provider shipped disabled — nothing
+    /// here fails on it, since <c>HttpClient.BaseAddress</c> still has to be a valid URI even for a
+    /// client whose own <c>Enabled</c> check means it is never actually called.
+    /// </remarks>
+    [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.AggressiveInlining)]
+    private static string BaseAddressOf(string baseUrl) =>
+        BaseAddress(string.IsNullOrWhiteSpace(baseUrl) ? "http://localhost/" : baseUrl);
 }

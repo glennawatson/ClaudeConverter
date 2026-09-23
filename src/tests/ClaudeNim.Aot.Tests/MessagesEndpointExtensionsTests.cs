@@ -331,6 +331,41 @@ public sealed class MessagesEndpointExtensionsTests
         await Assert.That(client.Requests[1].Model).IsEqualTo(FallbackModel);
     }
 
+    /// <summary>A fallback entry naming a provider dispatches to that provider, not NIM.</summary>
+    /// <returns>A task that completes when the assertions have run.</returns>
+    /// <remarks>
+    /// This is the general mechanism a deployment mixes providers with: an ordinary entry in the
+    /// same configured chain, walked exactly like a NIM candidate, just addressed elsewhere — no
+    /// special-cased "local last resort" step exists separately from this.
+    /// </remarks>
+    [Test]
+    public async Task FallbackEntryNamingOllamaDispatchesToTheOllamaClient()
+    {
+        const string OllamaFallback = "ollama:qwen3-coder:30b";
+        const string OllamaBareModel = "qwen3-coder:30b";
+
+        var completion = new NimChatCompletion(
+            Choices: [new NimChoice(Message: new NimChatMessage(AssistantRole, NimContent.FromText(ServedResponseText)))]);
+        var client = new FakeNimClient { OnSendChat = static _ => new HttpResponseMessage(HttpStatusCode.ServiceUnavailable) };
+        var ollama = new FakeOpenAiCompatibleClient { OnSendChat = _ => JsonResponse(HttpStatusCode.OK, completion) };
+
+        List<AnthropicMessage> messages = [new(AnthropicMessage.UserRole, MessageContent.FromText(OrdinaryUserText))];
+        var request = new MessagesRequest(ClaudeModel, messages, OrdinaryMaxTokens);
+
+        var result = await MessagesEndpointExtensions.SendMessageAsync(
+            request,
+            Context(),
+            Services(client, OllamaFallback, ollama),
+            CancellationToken.None);
+
+        var message = ((JsonHttpResult<MessagesResponse>)result!).Value!;
+
+        await Assert.That(message.Content[0].Text).IsEqualTo(ServedResponseText);
+        await Assert.That(client.Requests.Count).IsEqualTo(1);
+        await Assert.That(ollama.Requests.Count).IsEqualTo(1);
+        await Assert.That(ollama.Requests[0].Model).IsEqualTo(OllamaBareModel);
+    }
+
     /// <summary>The fallback warning carries the upstream's own body, not just the status.</summary>
     /// <returns>A task that completes when the assertions have run.</returns>
     /// <remarks>
@@ -775,6 +810,8 @@ public sealed class MessagesEndpointExtensionsTests
             new AnthropicStreamTranslatorFactory(),
             new ModelHealthTracker(new ModelHealthOptions(), TimeProvider.System),
             new HttpTimeoutOptions(),
+            new FakeOpenAiCompatibleClient(),
+            new FakeOpenAiCompatibleClient(),
             TimeProvider.System,
             NullLogger<MessageServices>.Instance);
 
@@ -797,6 +834,8 @@ public sealed class MessagesEndpointExtensionsTests
             new AnthropicStreamTranslatorFactory(),
             new ModelHealthTracker(new ModelHealthOptions(), TimeProvider.System),
             new HttpTimeoutOptions(),
+            new FakeOpenAiCompatibleClient(),
+            new FakeOpenAiCompatibleClient(),
             TimeProvider.System,
             logger ?? NullLogger<MessageServices>.Instance);
 
@@ -818,6 +857,8 @@ public sealed class MessagesEndpointExtensionsTests
             new AnthropicStreamTranslatorFactory(),
             new ModelHealthTracker(new ModelHealthOptions(), TimeProvider.System),
             new HttpTimeoutOptions(),
+            new FakeOpenAiCompatibleClient(),
+            new FakeOpenAiCompatibleClient(),
             TimeProvider.System,
             logger);
 
@@ -840,6 +881,32 @@ public sealed class MessagesEndpointExtensionsTests
             new AnthropicStreamTranslatorFactory(),
             modelHealth,
             new HttpTimeoutOptions(),
+            new FakeOpenAiCompatibleClient(),
+            new FakeOpenAiCompatibleClient(),
+            TimeProvider.System,
+            NullLogger<MessageServices>.Instance);
+
+    /// <summary>Builds the services a turn is served from, with a fallback chain and a caller-supplied Ollama client.</summary>
+    /// <param name="client">The fake NIM upstream client.</param>
+    /// <param name="fallback">The model the routed one steps aside for, which may name a non-NIM provider.</param>
+    /// <param name="ollamaClient">The client a fallback entry naming Ollama dispatches to.</param>
+    /// <returns>The services.</returns>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static MessageServices Services(FakeNimClient client, string fallback, FakeOpenAiCompatibleClient ollamaClient) =>
+        new(
+            new FakeModelRouter(new(ClaudeModel, UpstreamModel, ModelTier.Sonnet, true, [fallback])),
+            client,
+            new RequestGate(new RateLimitOptions(RequestsPerWindow: 0, MaxConcurrency: 0)),
+            new NvidiaNimOptions(),
+            FastRetries,
+            new ModelCatalogOptions(),
+            new AnthropicRequestOptimizer(new OptimizationOptions()),
+            new AnthropicCompletionTranslator(NullLogger<AnthropicCompletionTranslator>.Instance),
+            new AnthropicStreamTranslatorFactory(),
+            new ModelHealthTracker(new ModelHealthOptions(), TimeProvider.System),
+            new HttpTimeoutOptions(),
+            ollamaClient,
+            new FakeOpenAiCompatibleClient(),
             TimeProvider.System,
             NullLogger<MessageServices>.Instance);
 

@@ -238,6 +238,8 @@ export CLAUDENIM_ModelRouting__EnableThinking=false
 | `Timeouts` | Upstream connect, header-wait, body-read, and stream-idle timeouts |
 | `Retries` | Retry attempts and exponential-backoff delay for transient upstream failures |
 | `ModelHealth` | How many failures put a model in cooldown, and how long the cooldown lasts |
+| `Ollama` | A local Ollama server a `ollama:`-prefixed model resolves to |
+| `OpenAi` | A hosted OpenAI-compatible endpoint (literal OpenAI, or Azure AI Foundry) a `openai:`/`azure:`-prefixed model resolves to |
 | `Optimizations` | The local fast paths for Claude Code's housekeeping requests |
 
 ### Model discovery
@@ -390,6 +392,32 @@ named by its gateway identifier get a chain — the client picked that model fro
 proxy advertised, and answering as a different one is not a substitution it asked for. Every
 substitution is logged at warning naming both models, because the tier the client asked for is now
 being served by something else, usually weaker.
+
+### Mixing in a local or hosted model
+
+Every place a model is named in configuration — a tier's own primary model, or an entry in its
+fallback chain — accepts a provider prefix: `ollama:qwen3-coder:30b` or `openai:gpt-5-mini` name a
+model served by something other than NIM, while a bare identifier such as
+`nvidia/nemotron-3-super-120b-a12b` stays NIM exactly as before. `azure:` is accepted as an alias
+for `openai:`, since Azure AI Foundry's own Models endpoint speaks the identical OpenAI-compatible
+shape. The prefix is proxy-internal addressing and never reaches the wire — only the bare model
+name after it does.
+
+A model naming `Ollama` or `OpenAi` is disabled until that section's own `Enabled` is turned on —
+`Ollama:Enabled`/`OLLAMA_ENABLED` and `OpenAi:Enabled`/`OPENAI_ENABLED` — and answers as unavailable
+without attempting a call while it is off, the same as a NIM model that is cooling down. Neither
+provider gets NIM's retry ladder, downgrade ladder, or rate-limit pacing: those exist to work around
+properties specific to NVIDIA's shared free-tier endpoints, and nothing else here shares them. What
+both still get is a bound of their own — `Ollama:ReadSeconds`/`CompletionSeconds` and the matching
+`OpenAi:` settings — sized generously, since a local model can legitimately take minutes to answer
+on ordinary hardware.
+
+A local model is the one candidate in the whole system immune to NVIDIA's free-tier quota: it never
+returns a `429`, never saturates from another tenant, and never gets deprecated out from under a
+deployment the way a NIM model occasionally does. Naming it last in a tier's fallback chain — the
+slowest, most reliable rung — gets a turn served even when every NIM candidate for that tier has
+failed, without needing a mode of its own for that: it is exactly the same chain, exactly the same
+walk, just addressed somewhere else on its last rung.
 
 ### Cooling down a failing model
 

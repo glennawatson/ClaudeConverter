@@ -104,6 +104,18 @@ public static class EnvironmentConfigurationExtensions
         new("MODEL_FAILURE_THRESHOLD", "ModelHealth:FailureThreshold"),
         new("MODEL_COOLDOWN_SECONDS", "ModelHealth:CooldownSeconds"),
 
+        new("OLLAMA_ENABLED", "Ollama:Enabled"),
+        new("OLLAMA_BASE_URL", "Ollama:BaseUrl"),
+        new("OLLAMA_API_KEY", "Ollama:ApiKey"),
+        new("OLLAMA_READ_TIMEOUT_SECONDS", "Ollama:ReadSeconds"),
+        new("OLLAMA_COMPLETION_TIMEOUT_SECONDS", "Ollama:CompletionSeconds"),
+
+        new("OPENAI_ENABLED", "OpenAi:Enabled"),
+        new("OPENAI_BASE_URL", "OpenAi:BaseUrl"),
+        new("OPENAI_API_KEY", "OpenAi:ApiKey"),
+        new("OPENAI_READ_TIMEOUT_SECONDS", "OpenAi:ReadSeconds"),
+        new("OPENAI_COMPLETION_TIMEOUT_SECONDS", "OpenAi:CompletionSeconds"),
+
         new("MOCK_QUOTA_PROBE", "Optimizations:MockQuotaProbe"),
         new("SKIP_TITLE_GENERATION", "Optimizations:SkipTitleGeneration"),
         new("SKIP_SUGGESTION_MODE", "Optimizations:SkipSuggestionMode"),
