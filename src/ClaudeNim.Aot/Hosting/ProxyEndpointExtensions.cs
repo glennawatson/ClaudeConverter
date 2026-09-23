@@ -2,6 +2,8 @@
 // Glenn Watson and Contributors licenses this file to you under the MIT license.
 // See the LICENSE file in the project root for full license information.
 using ClaudeNim.Aot.Endpoints;
+using ClaudeNim.Aot.Endpoints.Anthropic;
+using ClaudeNim.Aot.Endpoints.Codex;
 using Microsoft.AspNetCore.Routing;
 
 namespace ClaudeNim.Aot.Hosting;
@@ -10,8 +12,8 @@ namespace ClaudeNim.Aot.Hosting;
 /// <remarks>
 /// Each area registers itself through its own <c>Map…Endpoints</c> method, so the route table for
 /// a feature lives beside the code that serves it rather than accumulating in the entry point.
-/// The authentication filter is applied here, once, to the three Anthropic groups: health stays
-/// open so an orchestrator can probe it without holding the proxy's secret.
+/// The authentication filter is applied here, once, to every protocol group: health stays open so
+/// an orchestrator can probe it without holding the proxy's secret.
 /// </remarks>
 public static class ProxyEndpointExtensions
 {
@@ -30,6 +32,8 @@ public static class ProxyEndpointExtensions
             _ = endpoints.MapMessagesEndpoints().AddEndpointFilter<ProxyAuthenticationFilter>();
             _ = endpoints.MapTokenCountEndpoints().AddEndpointFilter<ProxyAuthenticationFilter>();
             _ = endpoints.MapModelsEndpoints().AddEndpointFilter<ProxyAuthenticationFilter>();
+
+            _ = endpoints.MapResponsesEndpoints().AddEndpointFilter<ProxyAuthenticationFilter>();
 
             return endpoints;
         }

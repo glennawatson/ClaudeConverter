@@ -62,18 +62,16 @@ public static class ToolChoiceTranslator
     public static JsonElement SchemaOrEmpty(JsonElement? schema) =>
         schema is { ValueKind: JsonValueKind.Object } value ? value : JsonElements.EmptyObjectSchema;
 
-    /// <summary>Extracts the tool name and builds a named function choice, or returns auto if missing.</summary>
-    /// <param name="choice">The tool choice object.</param>
-    /// <returns>The named function choice, or the auto choice if the name is missing.</returns>
-    private static JsonElement NamedFunctionOrAuto(JsonElement choice) =>
-        choice.TryGetProperty("name", out var name) && name.ValueKind == JsonValueKind.String
-            ? NamedFunction(name.GetString() ?? string.Empty)
-            : Auto;
-
     /// <summary>Builds a JSON document for a named function tool choice.</summary>
     /// <param name="toolName">The tool name to encode.</param>
     /// <returns>The named function choice element.</returns>
-    private static JsonElement NamedFunction(string toolName)
+    /// <remarks>
+    /// Internal rather than private: the Responses API's own named-tool-choice shape nests the
+    /// name one level shallower than Anthropic's, but decodes to this same NIM-side shape once the
+    /// name is extracted, so <see cref="Nvidia.CodexRequestBuilder"/> reuses this rather than
+    /// building the JSON a second time.
+    /// </remarks>
+    internal static JsonElement NamedFunction(string toolName)
     {
         var buffer = new ArrayBufferWriter<byte>(NamedFunctionBufferBytes);
         using (var writer = new Utf8JsonWriter(buffer))
@@ -88,4 +86,12 @@ public static class ToolChoiceTranslator
 
         return JsonDocument.Parse(buffer.WrittenMemory).RootElement.Clone();
     }
+
+    /// <summary>Extracts the tool name and builds a named function choice, or returns auto if missing.</summary>
+    /// <param name="choice">The tool choice object.</param>
+    /// <returns>The named function choice, or the auto choice if the name is missing.</returns>
+    private static JsonElement NamedFunctionOrAuto(JsonElement choice) =>
+        choice.TryGetProperty("name", out var name) && name.ValueKind == JsonValueKind.String
+            ? NamedFunction(name.GetString() ?? string.Empty)
+            : Auto;
 }

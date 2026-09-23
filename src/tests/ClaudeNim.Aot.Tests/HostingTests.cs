@@ -2,6 +2,8 @@
 // Glenn Watson and Contributors licenses this file to you under the MIT license.
 // See the LICENSE file in the project root for full license information.
 using ClaudeNim.Aot.Endpoints;
+using ClaudeNim.Aot.Endpoints.Anthropic;
+using ClaudeNim.Aot.Endpoints.Codex;
 using ClaudeNim.Aot.Hosting;
 using ClaudeNim.Aot.Nvidia;
 using ClaudeNim.Aot.RateLimiting;
@@ -34,6 +36,7 @@ public sealed class HostingTests
         await Assert.That(provider.GetRequiredService<INimClient>()).IsNotNull();
         await Assert.That(provider.GetRequiredService<INimModelCatalog>()).IsNotNull();
         await Assert.That(provider.GetRequiredService<MessageServices>()).IsNotNull();
+        await Assert.That(provider.GetRequiredService<CodexServices>()).IsNotNull();
         await Assert.That(provider.GetRequiredService<ProxyAuthenticationFilter>()).IsNotNull();
     }
 

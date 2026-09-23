@@ -4,6 +4,7 @@
 using System.Net;
 using ClaudeNim.Aot.Configuration;
 using ClaudeNim.Aot.Endpoints;
+using ClaudeNim.Aot.Endpoints.Anthropic;
 using ClaudeNim.Aot.Nvidia;
 using ClaudeNim.Aot.RateLimiting;
 using ClaudeNim.Aot.Routing;
@@ -12,6 +13,7 @@ using Microsoft.AspNetCore.Http.Json;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Refit;
+using CodexEndpoints = ClaudeNim.Aot.Endpoints.Codex;
 
 namespace ClaudeNim.Aot.Hosting;
 
@@ -94,7 +96,21 @@ public static class ProxyServiceExtensions
             _ = services.AddSingleton<IRequestGate, RequestGate>();
             _ = services.AddSingleton<INimClient, NimClient>();
             _ = services.AddSingleton<INimModelCatalog, NimModelCatalog>();
+
+            // Each protocol registers its own IRequestOptimizer (or none, if it has no housekeeping
+            // traffic worth recognising), ICompletionTranslator and IStreamTranslatorFactory behind
+            // that protocol's own interfaces — the two share nothing beyond both translating out of
+            // the same Nim* wire types, which is why both sets carry the same interface names in
+            // different namespaces rather than one shared abstraction.
+            _ = services.AddSingleton<IRequestOptimizer, AnthropicRequestOptimizer>();
+            _ = services.AddSingleton<ICompletionTranslator, AnthropicCompletionTranslator>();
+            _ = services.AddSingleton<IStreamTranslatorFactory, AnthropicStreamTranslatorFactory>();
             _ = services.AddSingleton<MessageServices>();
+
+            _ = services.AddSingleton<CodexEndpoints.ICompletionTranslator, CodexEndpoints.ResponsesCompletionTranslator>();
+            _ = services.AddSingleton<CodexEndpoints.IStreamTranslatorFactory, CodexEndpoints.ResponsesStreamTranslatorFactory>();
+            _ = services.AddSingleton<CodexEndpoints.CodexServices>();
+
             _ = services.AddSingleton<ProxyAuthenticationFilter>();
 
             return services.AddNimTransport(nim, timeouts);

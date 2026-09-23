@@ -5,6 +5,8 @@ using System.Text.Json;
 using System.Text.Json.Serialization;
 using ClaudeNim.Aot.Anthropic;
 using ClaudeNim.Aot.Anthropic.Streaming;
+using ClaudeNim.Aot.Codex;
+using ClaudeNim.Aot.Codex.Streaming;
 using ClaudeNim.Aot.Endpoints;
 using ClaudeNim.Aot.Nvidia;
 
@@ -87,4 +89,21 @@ namespace ClaudeNim.Aot.Serialization;
 [JsonSerializable(typeof(NimModel))]
 [JsonSerializable(typeof(NimModelList))]
 [JsonSerializable(typeof(HealthReport))]
+[JsonSerializable(typeof(ResponsesRequest))]
+[JsonSerializable(typeof(ResponsesResponse))]
+[JsonSerializable(typeof(ResponseInputItem))]
+[JsonSerializable(typeof(List<ResponseInputItem>))]
+[JsonSerializable(typeof(ResponseContentItem))]
+[JsonSerializable(typeof(List<ResponseContentItem>))]
+[JsonSerializable(typeof(FunctionCallOutput))]
+[JsonSerializable(typeof(CodexTool))]
+[JsonSerializable(typeof(ReasoningOptions))]
+[JsonSerializable(typeof(TextControls))]
+[JsonSerializable(typeof(CodexTextFormat))]
+[JsonSerializable(typeof(ResponseUsage))]
+[JsonSerializable(typeof(ResponseTokenDetails))]
+[JsonSerializable(typeof(IncompleteDetails))]
+[JsonSerializable(typeof(ResponseError))]
+[JsonSerializable(typeof(ResponseStreamEvent))]
+[JsonSerializable(typeof(CodexErrorResponse))]
 public sealed partial class ProxyJsonContext : JsonSerializerContext;
