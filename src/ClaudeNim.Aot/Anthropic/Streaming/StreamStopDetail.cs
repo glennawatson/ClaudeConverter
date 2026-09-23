@@ -8,7 +8,9 @@ namespace ClaudeNim.Aot.Anthropic.Streaming;
 /// <summary>The stop information carried by a <c>message_delta</c> event.</summary>
 /// <param name="StopReason">Why generation ended; see <see cref="StopReasons"/>.</param>
 /// <param name="StopSequence">The stop sequence that ended generation, when one did.</param>
+/// <param name="StopDetails">Why a declined turn was declined; absent for every stop reason but <c>refusal</c>.</param>
 [System.Diagnostics.DebuggerDisplay("StreamStopDetail: {ToString(),nq}")]
 public sealed record StreamStopDetail(
     [property: JsonPropertyName("stop_reason")] string? StopReason,
-    [property: JsonPropertyName("stop_sequence")] string? StopSequence = null);
+    [property: JsonPropertyName("stop_sequence")] string? StopSequence = null,
+    [property: JsonPropertyName("stop_details")] StopDetail? StopDetails = null);

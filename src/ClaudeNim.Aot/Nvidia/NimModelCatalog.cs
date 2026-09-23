@@ -308,6 +308,7 @@ public sealed class NimModelCatalog : INimModelCatalog, IDisposable
     /// <param name="models">The models list to populate.</param>
     private void AddClaudeAliases(List<ModelDescriptor> models)
     {
+        AddAlias(models, "claude-opus-5-5", "Claude Opus 5.5", _routing.Opus, _routing.EnableOpusThinking);
         AddAlias(models, "claude-opus-5", "Claude Opus 5", _routing.Opus, _routing.EnableOpusThinking);
         AddAlias(models, "claude-sonnet-5", "Claude Sonnet 5", _routing.Sonnet, _routing.EnableSonnetThinking);
         AddAlias(models, "claude-haiku-4-5", "Claude Haiku 4.5", _routing.Haiku, _routing.EnableHaikuThinking);

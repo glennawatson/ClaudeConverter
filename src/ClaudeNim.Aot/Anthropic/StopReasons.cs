@@ -18,6 +18,17 @@ public static class StopReasons
     /// <summary>Generation stopped at a caller-supplied stop sequence.</summary>
     internal const string StopSequence = "stop_sequence";
 
+    /// <summary>The turn was declined by a safety classifier rather than answered.</summary>
+    /// <remarks>
+    /// Claude 5.5-era clients check for this before reading <c>content</c>, and a turn carrying it
+    /// is worth re-asking elsewhere rather than treating as an answer. NVIDIA's own filters stop a
+    /// turn the same way, so the two are reported the same way.
+    /// </remarks>
+    internal const string Refusal = "refusal";
+
+    /// <summary>The upstream finish reason meaning a filter stopped the turn.</summary>
+    private const string ContentFiltered = "content_filter";
+
     /// <summary>Maps an OpenAI-style <c>finish_reason</c> onto its Anthropic equivalent.</summary>
     /// <param name="finishReason">The upstream finish reason, which may be <see langword="null"/>.</param>
     /// <returns>The matching Anthropic stop reason.</returns>
@@ -25,6 +36,17 @@ public static class StopReasons
     {
         "tool_calls" => ToolUse,
         "length" => MaxTokens,
+        ContentFiltered => Refusal,
         _ => EndTurn,
     };
+
+    /// <summary>Builds the detail that accompanies a declined turn.</summary>
+    /// <param name="stopReason">The stop reason the turn ended with.</param>
+    /// <returns>The detail, or <see langword="null"/> for every reason but a refusal.</returns>
+    /// <remarks>
+    /// Null for anything else on purpose: a client reads this field behind the stop reason, and
+    /// Anthropic populates it on a refusal alone.
+    /// </remarks>
+    public static StopDetail? DetailFor(string? stopReason) =>
+        string.Equals(stopReason, Refusal, StringComparison.Ordinal) ? StopDetail.Filtered : null;
 }

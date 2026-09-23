@@ -72,8 +72,17 @@ returning `not_found_error` when the credential cannot reach it.
 
 Every chat-capable model the credential can reach is advertised. Reasoning-capable models appear
 twice — once normally, once as `(no thinking)` — because a reasoning model with its trace off is a
-genuinely different choice for a coding session. The Claude tier names (`claude-opus-5`,
-`claude-sonnet-5`, `claude-haiku-4-5`) are also advertised and route according to `ModelRouting`.
+genuinely different choice for a coding session. The Claude tier names (`claude-opus-5-5`,
+`claude-opus-5`, `claude-sonnet-5`, `claude-haiku-4-5`) are also advertised and route according to
+`ModelRouting`. A name this proxy does not advertise still routes: anything carrying `opus`,
+`fable` or `mythos` takes the Opus tier — those two sit above Opus in Anthropic's line-up and this
+proxy has no tier above it, so a client naming one gets the most capable model configured.
+
+A turn NVIDIA's own filters decline is reported the way a Claude 5.5-era client expects one:
+`stop_reason: "refusal"` with a `stop_details` object, rather than `end_turn` with nothing in it.
+The distinction matters because those clients check the stop reason before reading the content, and
+an empty `end_turn` reads as a model with nothing to say — which for a coding session ends the work
+rather than retrying it somewhere else.
 
 Capabilities are reported from what this proxy can actually deliver over NIM, not copied from
 Anthropic's own listing: `output_config.effort` maps to NIM's top-level `reasoning_effort`, with

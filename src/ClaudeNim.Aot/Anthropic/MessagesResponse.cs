@@ -12,6 +12,7 @@ namespace ClaudeNim.Aot.Anthropic;
 /// <param name="StopReason">Why generation ended; see <see cref="StopReasons"/>.</param>
 /// <param name="Usage">The token accounting for the call.</param>
 /// <param name="StopSequence">The stop sequence that ended generation, when one did.</param>
+/// <param name="StopDetails">Why a declined turn was declined; absent for every stop reason but <c>refusal</c>.</param>
 /// <param name="Type">The object discriminator, always <c>message</c>.</param>
 /// <param name="Role">The author of the message, always <c>assistant</c>.</param>
 [System.Diagnostics.DebuggerDisplay("MessagesResponse: {ToString(),nq}")]
@@ -22,5 +23,6 @@ public sealed record MessagesResponse(
     [property: JsonPropertyName("stop_reason")] string? StopReason,
     [property: JsonPropertyName("usage")] TokenUsage Usage,
     [property: JsonPropertyName("stop_sequence")] string? StopSequence = null,
+    [property: JsonPropertyName("stop_details")] StopDetail? StopDetails = null,
     [property: JsonPropertyName("type")] string Type = "message",
     [property: JsonPropertyName("role")] string Role = AnthropicMessage.AssistantRole);

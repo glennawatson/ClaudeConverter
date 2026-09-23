@@ -134,6 +134,23 @@ public sealed class ModelRouterTests
         await Assert.That(router.Classify(SonnetName)).IsEqualTo(ModelTier.Sonnet);
     }
 
+    /// <summary>The Claude 5.5-era names classify onto the tier that serves them.</summary>
+    /// <returns>A task that completes when the assertions have run.</returns>
+    /// <remarks>
+    /// Fable and Mythos sit above Opus in Anthropic's line-up and this proxy has no tier above
+    /// Opus, so a client naming one is asking for the most capable model configured, which is
+    /// what the Opus tier holds. Left unclassified they fell to the catch-all default instead.
+    /// </remarks>
+    [Test]
+    public async Task CurrentModelNamesClassifyOntoTheirTier()
+    {
+        var router = new ModelRouter(new ModelRoutingOptions());
+
+        await Assert.That(router.Classify("claude-opus-5-5")).IsEqualTo(ModelTier.Opus);
+        await Assert.That(router.Classify("claude-fable-5-1")).IsEqualTo(ModelTier.Opus);
+        await Assert.That(router.Classify("claude-mythos-5-1")).IsEqualTo(ModelTier.Opus);
+    }
+
     /// <summary>A tier's fallback chain is read in the order it was configured.</summary>
     /// <returns>A task that completes when the assertions have run.</returns>
     [Test]

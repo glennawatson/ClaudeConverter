@@ -46,15 +46,17 @@ public static class NimCompletionTranslator
         var choice = FirstChoice(completion);
         var blocks = ComposeBlocks(choice?.Message, nimModel, thinkingEnabled, logger);
         var usage = completion?.Usage;
+        var stopReason = StopReasons.FromFinishReason(choice?.FinishReason);
 
         return new(
             messageId,
             model,
             blocks,
-            StopReasons.FromFinishReason(choice?.FinishReason),
+            stopReason,
             new TokenUsage(
                 usage?.PromptTokens ?? inputTokens,
-                usage?.CompletionTokens ?? EstimateOutputTokens(blocks)));
+                usage?.CompletionTokens ?? EstimateOutputTokens(blocks)),
+            StopDetails: StopReasons.DetailFor(stopReason));
     }
 
     /// <summary>Composes the content blocks a completed upstream message translates into.</summary>

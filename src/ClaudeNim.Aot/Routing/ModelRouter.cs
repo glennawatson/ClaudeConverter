@@ -42,7 +42,12 @@ public sealed record ModelRouter(ModelRoutingOptions Options) : IModelRouter
             return ModelTier.Default;
         }
 
-        if (requestedModel.Contains("opus", StringComparison.OrdinalIgnoreCase))
+        // Fable and Mythos sit above Opus in Anthropic's line-up, and this proxy has no tier above
+        // Opus to put them on: a client naming one is asking for the most capable model there is,
+        // which is what the Opus tier is configured with.
+        if (requestedModel.Contains("opus", StringComparison.OrdinalIgnoreCase)
+            || requestedModel.Contains("fable", StringComparison.OrdinalIgnoreCase)
+            || requestedModel.Contains("mythos", StringComparison.OrdinalIgnoreCase))
         {
             return ModelTier.Opus;
         }

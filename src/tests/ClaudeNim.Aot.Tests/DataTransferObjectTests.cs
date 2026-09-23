@@ -1,10 +1,12 @@
 // Copyright (c) 2026 Glenn Watson and Contributors. All rights reserved.
 // Glenn Watson and Contributors licenses this file to you under the MIT license.
 // See the LICENSE file in the project root for full license information.
+using System.Text.Json;
 using ClaudeNim.Aot.Anthropic;
 using ClaudeNim.Aot.Anthropic.Streaming;
 using ClaudeNim.Aot.Configuration;
 using ClaudeNim.Aot.Nvidia;
+using ClaudeNim.Aot.Serialization;
 
 namespace ClaudeNim.Aot.Tests;
 
@@ -17,6 +19,12 @@ public sealed class DataTransferObjectTests
 {
     /// <summary>The Claude model name shared by the DTO fixtures.</summary>
     private const string ClaudeModel = "claude-sonnet-5";
+
+    /// <summary>The message identifier shared by the DTO fixtures.</summary>
+    private const string MessageId = "msg_1";
+
+    /// <summary>The stop reason a declined turn carries.</summary>
+    private const string RefusalStopReason = "refusal";
 
     /// <summary>The error class shared by the error-body fixtures.</summary>
     private const string ApiErrorType = "api_error";
@@ -41,7 +49,7 @@ public sealed class DataTransferObjectTests
     [Test]
     public async Task StreamingEnvelopesRoundTripTheirConstructorArguments()
     {
-        var message = new StreamMessage("msg_1", ClaudeModel, new TokenUsage(SamplePromptTokens, SampleCompletionTokens), []);
+        var message = new StreamMessage(MessageId, ClaudeModel, new TokenUsage(SamplePromptTokens, SampleCompletionTokens), []);
         var start = new StreamMessageStart(message);
         var blockStart = new StreamContentBlockStart(0, ContentBlock.ForText(string.Empty));
         var delta = new StreamContentBlockDelta(0, StreamDelta.ForText("hi"));
@@ -49,7 +57,7 @@ public sealed class DataTransferObjectTests
         var stopDetail = new StreamStopDetail(EndTurnStopReason, "STOP");
         var messageDelta = new StreamMessageDelta(stopDetail, new TokenUsage(SamplePromptTokens, SampleCompletionTokens));
 
-        await Assert.That(start.Message.Id).IsEqualTo("msg_1");
+        await Assert.That(start.Message.Id).IsEqualTo(MessageId);
         await Assert.That(start.Type).IsEqualTo("message_start");
         await Assert.That(blockStart.Type).IsEqualTo("content_block_start");
         await Assert.That(delta.Delta.Text).IsEqualTo("hi");
@@ -110,5 +118,54 @@ public sealed class DataTransferObjectTests
         await Assert.That(StopReasons.FromFinishReason("length")).IsEqualTo("max_tokens");
         await Assert.That(StopReasons.FromFinishReason("stop")).IsEqualTo(EndTurnStopReason);
         await Assert.That(StopReasons.FromFinishReason(null)).IsEqualTo(EndTurnStopReason);
+    }
+
+    /// <summary>A filtered turn is reported as a refusal rather than as a finished one.</summary>
+    /// <returns>A task that completes when the assertions have run.</returns>
+    /// <remarks>
+    /// A Claude 5.5-era client checks the stop reason before reading the content, and a declined
+    /// turn carries no content to read. Reported as <c>end_turn</c> it was indistinguishable from
+    /// a model with nothing to say, which for a coding client ends the work.
+    /// </remarks>
+    [Test]
+    public async Task FilteredTurnIsReportedAsARefusal()
+    {
+        await Assert.That(StopReasons.FromFinishReason("content_filter")).IsEqualTo(RefusalStopReason);
+        await Assert.That(StopReasons.DetailFor(RefusalStopReason)!.Type).IsEqualTo(RefusalStopReason);
+        await Assert.That(StopReasons.DetailFor(RefusalStopReason)!.Explanation).IsNotNull();
+    }
+
+    /// <summary>The detail is attached to a refusal alone, as Anthropic documents it.</summary>
+    /// <returns>A task that completes when the assertions have run.</returns>
+    [Test]
+    public async Task StopDetailIsAbsentForEveryOtherStopReason()
+    {
+        await Assert.That(StopReasons.DetailFor(EndTurnStopReason)).IsNull();
+        await Assert.That(StopReasons.DetailFor("max_tokens")).IsNull();
+        await Assert.That(StopReasons.DetailFor(null)).IsNull();
+    }
+
+    /// <summary>A refusal serializes through the generated context, which is what native AOT needs.</summary>
+    /// <returns>A task that completes when the assertions have run.</returns>
+    /// <remarks>
+    /// Reflection-based serialization is off, so a payload missing from the context fails at
+    /// runtime rather than at build time. Serializing one here is what catches that.
+    /// </remarks>
+    [Test]
+    public async Task RefusalSerializesThroughTheGeneratedContext()
+    {
+        var message = new MessagesResponse(
+            MessageId,
+            ClaudeModel,
+            [ContentBlock.ForText(string.Empty)],
+            RefusalStopReason,
+            new TokenUsage(1, 0),
+            StopDetails: StopReasons.DetailFor(RefusalStopReason));
+
+        var json = JsonSerializer.Serialize(message, ProxyJsonContext.Default.MessagesResponse);
+
+        await Assert.That(json).Contains("\"stop_reason\":\"refusal\"");
+        await Assert.That(json).Contains("\"stop_details\":{");
+        await Assert.That(json).Contains("\"type\":\"refusal\"");
     }
 }

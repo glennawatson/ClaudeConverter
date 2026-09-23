@@ -823,7 +823,7 @@ public sealed class NimStreamTranslator(
         return writer.WriteAsync(
             StreamEventNames.MessageDelta,
             new(
-                new StreamStopDetail(stopReason),
+                new StreamStopDetail(stopReason, StopDetails: StopReasons.DetailFor(stopReason)),
                 new TokenUsage(_usage?.PromptTokens ?? inputTokens, outputTokens)),
             ProxyJsonContext.Default.StreamMessageDelta,
             cancellationToken);

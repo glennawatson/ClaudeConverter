@@ -202,6 +202,7 @@ public sealed class NimModelCatalogTests
         var models = await catalog.GetModelsAsync(CancellationToken.None);
 
         await Assert.That(models.Exists(static m => m.Id == "claude-opus-5")).IsTrue();
+        await Assert.That(models.Exists(static m => m.Id == "claude-opus-5-5")).IsTrue();
     }
 
     /// <summary>Claude aliases are omitted when not configured.</summary>
