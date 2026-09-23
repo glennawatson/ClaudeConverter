@@ -64,17 +64,19 @@ internal static partial class NvidiaLog
     /// <param name="attempt">The attempt that failed.</param>
     /// <param name="maxAttempts">The configured attempt budget.</param>
     /// <param name="delayMilliseconds">How long the next attempt waits.</param>
+    /// <param name="body">The upstream's own error body, truncated, or empty when none was read.</param>
     [LoggerMessage(
         EventId = 1008,
         Level = LogLevel.Warning,
-        Message = "NIM returned {Status} for {Model} on attempt {Attempt} of {MaxAttempts}; retrying in {DelayMilliseconds}ms.")]
+        Message = "NIM returned {Status} for {Model} on attempt {Attempt} of {MaxAttempts}; retrying in {DelayMilliseconds}ms. Upstream said: {Body}")]
     internal static partial void RetryingAfterTransientFailure(
         ILogger logger,
         string model,
         int status,
         int attempt,
         int maxAttempts,
-        double delayMilliseconds);
+        double delayMilliseconds,
+        string body);
 
     /// <summary>Records that an attempt which never reached a status is being made again.</summary>
     /// <param name="logger">The log to write to.</param>
@@ -123,17 +125,20 @@ internal static partial class NvidiaLog
     /// <param name="model">The model that could not serve the turn.</param>
     /// <param name="fallback">The model being tried instead.</param>
     /// <param name="status">The status the unavailable model returned, or 0 when it never answered.</param>
+    /// <param name="body">The upstream's own error body, truncated, or empty when none was read.</param>
     /// <remarks>
     /// The client is not told about this: it asked for a tier and it gets an answer, which is the
     /// point. But it is now being answered by a model it did not route to, and on the free tier
     /// that is usually a weaker one — so the substitution is a warning rather than a detail, and
-    /// it names both ends so a chain that always lands on the same rung is visible as one.
+    /// it names both ends so a chain that always lands on the same rung is visible as one. The body
+    /// is included here (rather than only at the final rejection) because a chain-walk candidate's
+    /// own reason for refusing never otherwise reaches the log at all — this is the diagnostic.
     /// </remarks>
     [LoggerMessage(
         EventId = 1027,
         Level = LogLevel.Warning,
-        Message = "{Model} was unavailable (status {Status}); trying {Fallback} instead.")]
-    internal static partial void FallingBackToAnotherModel(ILogger logger, string model, string fallback, int status);
+        Message = "{Model} was unavailable (status {Status}); trying {Fallback} instead. Upstream said: {Body}")]
+    internal static partial void FallingBackToAnotherModel(ILogger logger, string model, string fallback, int status, string body);
 
     /// <summary>Records that every model a tier could use was unavailable.</summary>
     /// <param name="logger">The log to write to.</param>

@@ -331,6 +331,40 @@ public sealed class MessagesEndpointExtensionsTests
         await Assert.That(client.Requests[1].Model).IsEqualTo(FallbackModel);
     }
 
+    /// <summary>The fallback warning carries the upstream's own body, not just the status.</summary>
+    /// <returns>A task that completes when the assertions have run.</returns>
+    /// <remarks>
+    /// A bare status code says a model was unavailable but not why, which is exactly the question
+    /// asked when the same status recurs across a cascade of turns. NVIDIA's own explanation is
+    /// read and logged here so the journal answers that question without a live repro.
+    /// </remarks>
+    [Test]
+    public async Task FallbackWarningIncludesTheUpstreamBody()
+    {
+        const string UpstreamDetail = "GPU capacity exhausted for this route";
+
+        var client = new FakeNimClient
+        {
+            OnSendChat = static request => request.Model == UpstreamModel
+                ? new HttpResponseMessage(HttpStatusCode.ServiceUnavailable) { Content = new StringContent(UpstreamDetail) }
+                : new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent("{}") },
+        };
+        var logger = new CapturingLogger<MessageServices>();
+
+        List<AnthropicMessage> messages = [new(AnthropicMessage.UserRole, MessageContent.FromText(OrdinaryUserText))];
+        var request = new MessagesRequest(ClaudeModel, messages, OrdinaryMaxTokens);
+
+        _ = await MessagesEndpointExtensions.SendMessageAsync(
+            request,
+            Context(),
+            Services(client, FallbackModel, logger),
+            CancellationToken.None);
+
+        var fellBack = logger.Entries.Find(static entry => entry.Message.Contains(UpstreamDetail, StringComparison.Ordinal));
+
+        await Assert.That(fellBack.Message).IsNotNull();
+    }
+
     /// <summary>Walking the chain spends one attempt a model, not the whole retry budget.</summary>
     /// <returns>A task that completes when the assertions have run.</returns>
     /// <remarks>

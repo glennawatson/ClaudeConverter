@@ -219,7 +219,7 @@ public static class MessagesEndpointExtensions
             }
             else
             {
-                NvidiaLog.FallingBackToAnotherModel(services.Logger, current.Resolved.NimModel, next, attempt.Status);
+                NvidiaLog.FallingBackToAnotherModel(services.Logger, current.Resolved.NimModel, next, attempt.Status, attempt.Body ?? string.Empty);
             }
 
             current = Rerouted(turn, services, next, Remaining(alternatives, candidate + 1));
@@ -324,10 +324,11 @@ public static class MessagesEndpointExtensions
         }
 
         var status = (int)response.StatusCode;
+        var body = Truncated(await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false));
         response.Dispose();
         services.ModelHealth.MarkUnavailable(model);
 
-        return new(null, status);
+        return new(null, status, Body: body);
     }
 
     /// <summary>Rebuilds a turn around the next model in its fallback chain.</summary>

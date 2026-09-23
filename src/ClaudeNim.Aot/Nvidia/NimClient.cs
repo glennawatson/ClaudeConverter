@@ -51,6 +51,9 @@ public sealed record NimClient(
     TimeProvider Time,
     ILogger<NimClient> Logger) : INimClient
 {
+    /// <summary>The longest a logged transient-failure body is kept, so one line stays a line.</summary>
+    private const int LoggedBodyLength = 400;
+
     /// <inheritdoc/>
     [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.AggressiveInlining)]
     public ValueTask<HttpResponseMessage> SendChatAsync(
@@ -103,13 +106,15 @@ public sealed record NimClient(
             }
 
             var delay = RetrySchedule.Delay(attempt, Retries, response.Headers.RetryAfter, Time.GetUtcNow());
+            var body = Truncated(await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false));
             NvidiaLog.RetryingAfterTransientFailure(
                 Logger,
                 current.Model,
                 (int)response.StatusCode,
                 attempt,
                 budget,
-                delay.TotalMilliseconds);
+                delay.TotalMilliseconds,
+                body);
 
             response.Dispose();
             await Task.Delay(delay, Time, cancellationToken).ConfigureAwait(false);
@@ -152,6 +157,12 @@ public sealed record NimClient(
 
         return null;
     }
+
+    /// <summary>Truncates a body so a log line stays a line rather than a dump of the whole payload.</summary>
+    /// <param name="body">The body to truncate.</param>
+    /// <returns>The body, truncated to <see cref="LoggedBodyLength"/> characters.</returns>
+    [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.AggressiveInlining)]
+    private static string Truncated(string body) => body.Length <= LoggedBodyLength ? body : body[..LoggedBodyLength];
 
     /// <summary>Determines whether a status means the upstream rejected the request rather than merely refused it for now.</summary>
     /// <param name="status">The status the upstream returned.</param>
