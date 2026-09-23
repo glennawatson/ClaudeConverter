@@ -129,6 +129,15 @@ public sealed class NimStreamTranslator(
     /// <summary>The prompt size to report, once the turn commits.</summary>
     private int _inputTokens;
 
+    /// <summary>Gets the status the mid-stream failure reported, or <see langword="null"/> when the turn has not failed this way.</summary>
+    /// <remarks>
+    /// A streamed call's own HTTP status is committed before generation begins, so a rejection NIM
+    /// discovers afterwards has nowhere to report it but here — inside an <c>error</c> payload on an
+    /// otherwise-successful response. A caller retrying after <see cref="StreamTurnOutcome.FailedBeforeOutput"/>
+    /// reads this to tell that shape of failure from an ordinary transient one.
+    /// </remarks>
+    public int? FailureStatusCode => _failure?.Code;
+
     /// <summary>Reads the upstream stream to completion, emitting Anthropic events as it goes.</summary>
     /// <param name="upstream">The NIM response body.</param>
     /// <param name="messageId">The identifier to report for the Anthropic message.</param>

@@ -1,6 +1,8 @@
 // Copyright (c) 2026 Glenn Watson and Contributors. All rights reserved.
 // Glenn Watson and Contributors licenses this file to you under the MIT license.
 // See the LICENSE file in the project root for full license information.
+using System.Net;
+
 namespace ClaudeNim.Aot.Nvidia;
 
 /// <summary>Strips the optional parts of a request that a model may not accept.</summary>
@@ -25,6 +27,25 @@ public static class NimRequestDowngrade
     /// a lighter request.
     /// </remarks>
     internal const int RungCount = 2;
+
+    /// <summary>Walks the ladder one rung for a status that means the upstream rejected the request.</summary>
+    /// <param name="request">The request to downgrade.</param>
+    /// <param name="status">
+    /// The status the rejection carried, whether it arrived as the call's own HTTP status or, for a
+    /// streamed call, as the status an error payload inside an already-successful response reports.
+    /// </param>
+    /// <returns>The downgraded request, or <see langword="null"/> when the status is not a rejection or nothing is left to strip.</returns>
+    /// <remarks>
+    /// A streamed call's status is committed before generation begins, so a rejection can arrive
+    /// inside the body of a <c>200</c> instead of as the response's own status. Both shapes name the
+    /// same failure and call for the same ladder — this is the one place that walks it, so a
+    /// streamed rejection is not left to exhaust the plain retry budget asking again with the exact
+    /// body that was just refused.
+    /// </remarks>
+    public static NimChatRequest? ForRejection(NimChatRequest request, int? status) =>
+        status is (int)HttpStatusCode.BadRequest or (int)HttpStatusCode.InternalServerError
+            ? WithoutReasoningControls(request) ?? WithoutReplayedReasoning(request)
+            : null;
 
     /// <summary>Removes the controls that ask the model to reason a particular way.</summary>
     /// <param name="request">The request to downgrade.</param>

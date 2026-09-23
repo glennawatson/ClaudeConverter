@@ -15,6 +15,9 @@ namespace ClaudeNim.Aot.Endpoints.Codex;
 public sealed class ResponsesStreamTranslator(CodexStreamTranslator inner) : IStreamTranslator
 {
     /// <inheritdoc/>
+    public int? FailureStatusCode => inner.FailureStatusCode;
+
+    /// <inheritdoc/>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public ValueTask<StreamTurnOutcome> TranslateAsync(
         Stream upstream,

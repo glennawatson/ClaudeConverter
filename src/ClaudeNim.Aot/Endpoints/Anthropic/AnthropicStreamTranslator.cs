@@ -15,6 +15,9 @@ namespace ClaudeNim.Aot.Endpoints.Anthropic;
 public sealed class AnthropicStreamTranslator(NimStreamTranslator inner) : IStreamTranslator
 {
     /// <inheritdoc/>
+    public int? FailureStatusCode => inner.FailureStatusCode;
+
+    /// <inheritdoc/>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public ValueTask<StreamTurnOutcome> TranslateAsync(
         Stream upstream,

@@ -192,6 +192,52 @@ public sealed class MessagesEndpointExtensionsTests
         await Assert.That(body).DoesNotContain("overloaded");
     }
 
+    /// <summary>A streamed rejection is downgraded and retried at the same model, not the whole retry budget.</summary>
+    /// <returns>A task that completes when the assertions have run.</returns>
+    /// <remarks>
+    /// A streamed call's own status is committed before generation begins, so a rejection NVIDIA
+    /// discovers afterwards arrives as an error payload inside an already-successful response
+    /// rather than as a status code. Retrying that with the identical body cannot succeed; this
+    /// covers that the reasoning controls are stripped and the same model asked again, the way the
+    /// non-streamed path already reacts to the same rejection arriving as a real status code.
+    /// </remarks>
+    [Test]
+    public async Task StreamedRejectionIsDowngradedAndRetriedAtSameModel()
+    {
+        const string Rejected = """
+            data: {"error":{"message":"Invalid request","code":400}}
+
+            data: [DONE]
+
+            """;
+
+        const string Answer = """
+            data: {"choices":[{"delta":{"content":"recovered"}}]}
+
+            data: [DONE]
+
+            """;
+
+        var client = new FakeNimClient { OnSendChat = static request => SaturatedResponse(request.ChatTemplateKwargs is null ? Answer : Rejected) };
+
+        var context = Context();
+        var request = new MessagesRequest(
+            ClaudeModel,
+            [new(AnthropicMessage.UserRole, MessageContent.FromText(OrdinaryUserText))],
+            OrdinaryMaxTokens,
+            Stream: true);
+
+        _ = await MessagesEndpointExtensions.SendMessageAsync(request, context, Services(client), CancellationToken.None);
+
+        var body = Encoding.UTF8.GetString(((MemoryStream)context.Response.Body).ToArray());
+
+        await Assert.That(client.Requests.Count).IsEqualTo(CallsAfterOneStreamRetry);
+        await Assert.That(client.Requests[0].Model).IsEqualTo(UpstreamModel);
+        await Assert.That(client.Requests[1].Model).IsEqualTo(UpstreamModel);
+        await Assert.That(client.Requests[1].ChatTemplateKwargs).IsNull();
+        await Assert.That(body).Contains("recovered");
+    }
+
     /// <summary>A turn the routed model cannot serve is served by the next model in the chain.</summary>
     /// <returns>A task that completes when the assertions have run.</returns>
     /// <remarks>

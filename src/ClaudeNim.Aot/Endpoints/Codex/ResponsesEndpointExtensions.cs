@@ -433,22 +433,18 @@ public static class ResponsesEndpointExtensions
                     return null;
                 }
 
-                NvidiaLog.RetryingStreamBeforeOutput(services.Logger, active.Resolved.NimModel, attempt, services.Retries.MaxAttempts);
-
                 if (owned)
                 {
                     current.Dispose();
                 }
 
-                var backoff = RetrySchedule.Delay(attempt, services.Retries, retryAfter: null, services.Time.GetUtcNow());
-                await Task.Delay(backoff, services.Time, cancellationToken).ConfigureAwait(false);
-
-                var reissued = await SendWithFallbackAsync(active, services, static _ => { }, cancellationToken).ConfigureAwait(false);
-                active = reissued.Turn;
-                current = reissued.Response;
+                var recovered = await RecoverFailedAttemptAsync(attempt, active, translator, services, cancellationToken)
+                    .ConfigureAwait(false);
+                active = recovered.Turn;
+                current = recovered.Response;
                 owned = true;
 
-                if (current.IsSuccessStatusCode)
+                if (recovered.ShouldContinue)
                 {
                     continue;
                 }
@@ -464,6 +460,90 @@ public static class ResponsesEndpointExtensions
                 current.Dispose();
             }
         }
+    }
+
+    /// <summary>Recovers a streamed attempt that failed before producing anything.</summary>
+    /// <param name="attempt">The attempt number that just failed.</param>
+    /// <param name="active">The turn as it stood when the failure arrived.</param>
+    /// <param name="translator">The translator the failed attempt ran through.</param>
+    /// <param name="services">The services the turn is served from.</param>
+    /// <param name="cancellationToken">Abandons the recovery when the client disconnects.</param>
+    /// <returns>The turn and response to continue with, and whether the caller should keep looping.</returns>
+    /// <remarks>
+    /// A rejection is downgraded and asked of the same model, because the same body would only be
+    /// rejected again; anything else is backed off and re-issued down the fallback chain instead,
+    /// since a model that just failed to start a stream is the least likely of the lot to answer.
+    /// </remarks>
+    private static async Task<CodexStreamRecoveryOutcome> RecoverFailedAttemptAsync(
+        int attempt,
+        CodexTurnContext active,
+        IStreamTranslator translator,
+        CodexServices services,
+        CancellationToken cancellationToken)
+    {
+        if (await TryDowngradeRejectedAsync(active, translator, services, cancellationToken).ConfigureAwait(false) is { } downgraded)
+        {
+            return new(downgraded.Turn, downgraded.Response, downgraded.Response.IsSuccessStatusCode);
+        }
+
+        NvidiaLog.RetryingStreamBeforeOutput(services.Logger, active.Resolved.NimModel, attempt, services.Retries.MaxAttempts);
+        var reissued = await ReissueAfterBackoffAsync(attempt, active, services, cancellationToken).ConfigureAwait(false);
+        return new(reissued.Turn, reissued.Response, reissued.Response.IsSuccessStatusCode);
+    }
+
+    /// <summary>Waits out the configured backoff, then re-issues a streamed turn down the fallback chain.</summary>
+    /// <param name="attempt">The attempt number the backoff is sized for.</param>
+    /// <param name="active">The turn to re-issue.</param>
+    /// <param name="services">The services the turn is served from.</param>
+    /// <param name="cancellationToken">Abandons the wait when the client disconnects.</param>
+    /// <returns>The re-issued turn and its response.</returns>
+    /// <remarks>
+    /// Re-issued through the chain rather than at the same model: a stream that ends before it
+    /// produces anything is how this upstream reports saturation from inside an otherwise
+    /// successful response, so the model that just did it is the least likely of the lot to
+    /// answer, and asking again in the same instant is the one reply guaranteed not to help.
+    /// </remarks>
+    private static async Task<CodexTurnAttempt> ReissueAfterBackoffAsync(
+        int attempt,
+        CodexTurnContext active,
+        CodexServices services,
+        CancellationToken cancellationToken)
+    {
+        var backoff = RetrySchedule.Delay(attempt, services.Retries, retryAfter: null, services.Time.GetUtcNow());
+        await Task.Delay(backoff, services.Time, cancellationToken).ConfigureAwait(false);
+
+        return await SendWithFallbackAsync(active, services, static _ => { }, cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>Retries a streamed turn at the same model with any rejected part of the request stripped.</summary>
+    /// <param name="active">The turn as it stood when the mid-stream failure arrived.</param>
+    /// <param name="translator">The translator the failed attempt ran through.</param>
+    /// <param name="services">The services the turn is served from.</param>
+    /// <param name="cancellationToken">Abandons the retry when the client disconnects.</param>
+    /// <returns>The retried turn and its response, or <see langword="null"/> when the failure was not a rejection.</returns>
+    /// <remarks>
+    /// A streamed call's own status is committed before generation begins, so a rejection NIM
+    /// discovers afterwards has nowhere to report it but inside an error payload on an
+    /// otherwise-successful response. Asking the same model again with the exact body it just
+    /// rejected cannot succeed, so this is the client's own downgrade ladder read from that
+    /// payload instead of from a status code.
+    /// </remarks>
+    private static async Task<CodexTurnAttempt?> TryDowngradeRejectedAsync(
+        CodexTurnContext active,
+        IStreamTranslator translator,
+        CodexServices services,
+        CancellationToken cancellationToken)
+    {
+        if (NimRequestDowngrade.ForRejection(active.UpstreamRequest, translator.FailureStatusCode) is not { } lighter)
+        {
+            return null;
+        }
+
+        NvidiaLog.ChatTemplateRejected(services.Logger, active.Resolved.NimModel);
+        var downgraded = active with { UpstreamRequest = lighter };
+        var response = await services.Client.SendChatAsync(downgraded.UpstreamRequest, downgraded.Resolved.Tier, cancellationToken)
+            .ConfigureAwait(false);
+        return new(downgraded, response);
     }
 
     /// <summary>Records that a streamed turn reached its end, and how long it took to get there.</summary>

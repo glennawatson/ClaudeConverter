@@ -9,6 +9,9 @@ namespace ClaudeNim.Aot.Endpoints.Codex;
 /// <remarks>One instance serves exactly one attempt at one streamed turn.</remarks>
 public interface IStreamTranslator
 {
+    /// <summary>Gets the status a mid-stream failure reported, or <see langword="null"/> when the turn has not failed this way.</summary>
+    int? FailureStatusCode { get; }
+
     /// <summary>Reads the upstream stream to completion, emitting events as it goes.</summary>
     /// <param name="upstream">The NIM response body.</param>
     /// <param name="responseId">The identifier to report for the turn.</param>

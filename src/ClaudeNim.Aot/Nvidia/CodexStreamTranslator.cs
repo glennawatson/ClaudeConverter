@@ -142,6 +142,9 @@ public sealed class CodexStreamTranslator(
     /// <summary>The prompt size to report, once the turn commits.</summary>
     private int _inputTokens;
 
+    /// <summary>Gets the status the mid-stream failure reported, or <see langword="null"/> when the turn has not failed this way.</summary>
+    public int? FailureStatusCode => _failure?.Code;
+
     /// <summary>Reads the upstream stream to completion, emitting Responses API events as it goes.</summary>
     /// <param name="upstream">The NIM response body.</param>
     /// <param name="responseId">The identifier to report for the turn.</param>

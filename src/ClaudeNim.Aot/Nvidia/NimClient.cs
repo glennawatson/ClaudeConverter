@@ -156,11 +156,9 @@ public sealed record NimClient(
     /// validator cannot handle with an internal error rather than a bad request, so treating 500
     /// as purely transient would retry the same unacceptable body until the attempts ran out.
     /// </remarks>
+    [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.AggressiveInlining)]
     private static NimChatRequest? Downgrade(NimChatRequest request, HttpStatusCode status) =>
-        status is not (HttpStatusCode.BadRequest or HttpStatusCode.InternalServerError)
-            ? null
-            : NimRequestDowngrade.WithoutReasoningControls(request)
-                ?? NimRequestDowngrade.WithoutReplayedReasoning(request);
+        NimRequestDowngrade.ForRejection(request, (int)status);
 
     /// <summary>Determines whether a failed attempt is worth making again.</summary>
     /// <param name="error">The exception the attempt raised.</param>
