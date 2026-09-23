@@ -32,6 +32,9 @@ public sealed class NimClientTests
     /// <summary>The timeout settings used across the fixtures.</summary>
     private static readonly HttpTimeoutOptions Timeouts = new();
 
+    /// <summary>A pacer with spacing disabled, so it never slows a fixture down.</summary>
+    private static readonly IRequestPacer NoPacing = new RequestPacer(new RateLimitOptions(MinGapMilliseconds: 0), TimeProvider.System);
+
     /// <summary>Timeout settings whose header wait runs out at once, while the completion budget does not.</summary>
     private static readonly HttpTimeoutOptions ImmediateDeadline = new(ReadSeconds: 0, CompletionSeconds: 30);
 
@@ -251,7 +254,7 @@ public sealed class NimClientTests
     public async Task ExpiredDeadlineIsNotRetried()
     {
         var api = new FakeNimApi { AnswerDelay = UnreachedAnswerDelay };
-        var client = new NimClient(api, Retries, ImmediateDeadline, TimeProvider.System, NullLogger<NimClient>.Instance);
+        var client = new NimClient(api, Retries, ImmediateDeadline, NoPacing, TimeProvider.System, NullLogger<NimClient>.Instance);
 
         _ = await Assert.That(async () => await client.SendChatAsync(StreamedRequest, ModelTier.Default, CancellationToken.None))
             .Throws<TaskCanceledException>();
@@ -271,7 +274,7 @@ public sealed class NimClientTests
     public async Task NonStreamedCallOutlivesTheHeaderWait()
     {
         var api = new FakeNimApi { AnswerDelay = SlowAnswerDelay, OnSendChat = static _ => new HttpResponseMessage(HttpStatusCode.OK) };
-        var client = new NimClient(api, Retries, ImmediateDeadline, TimeProvider.System, NullLogger<NimClient>.Instance);
+        var client = new NimClient(api, Retries, ImmediateDeadline, NoPacing, TimeProvider.System, NullLogger<NimClient>.Instance);
 
         var response = await client.SendChatAsync(RequestWithReasoning, ModelTier.Default, CancellationToken.None);
 
@@ -291,7 +294,7 @@ public sealed class NimClientTests
     public async Task TierOverrideExtendsTheHeaderWaitForItsOwnTier()
     {
         var api = new FakeNimApi { AnswerDelay = SlowAnswerDelay, OnSendChat = static _ => new HttpResponseMessage(HttpStatusCode.OK) };
-        var client = new NimClient(api, Retries, TieredDeadline, TimeProvider.System, NullLogger<NimClient>.Instance);
+        var client = new NimClient(api, Retries, TieredDeadline, NoPacing, TimeProvider.System, NullLogger<NimClient>.Instance);
 
         var response = await client.SendChatAsync(StreamedRequest, ModelTier.Opus, CancellationToken.None);
 
@@ -304,7 +307,7 @@ public sealed class NimClientTests
     public async Task UnrelatedTierDoesNotBorrowAnotherTiersOverride()
     {
         var api = new FakeNimApi { AnswerDelay = SlowAnswerDelay };
-        var client = new NimClient(api, Retries, TieredDeadline, TimeProvider.System, NullLogger<NimClient>.Instance);
+        var client = new NimClient(api, Retries, TieredDeadline, NoPacing, TimeProvider.System, NullLogger<NimClient>.Instance);
 
         _ = await Assert.That(async () => await client.SendChatAsync(StreamedRequest, ModelTier.Sonnet, CancellationToken.None))
             .Throws<TaskCanceledException>();
@@ -317,7 +320,7 @@ public sealed class NimClientTests
     {
         var api = new FakeNimApi { AnswerDelay = UnreachedAnswerDelay };
         var logger = new CapturingLogger<NimClient>();
-        var client = new NimClient(api, Retries, ImmediateDeadline, TimeProvider.System, logger);
+        var client = new NimClient(api, Retries, ImmediateDeadline, NoPacing, TimeProvider.System, logger);
 
         _ = await Assert.That(async () => await client.SendChatAsync(StreamedRequest, ModelTier.Default, CancellationToken.None))
             .Throws<TaskCanceledException>();
@@ -355,7 +358,7 @@ public sealed class NimClientTests
     {
         var api = new FakeNimApi { OnSendChat = static _ => new HttpResponseMessage(HttpStatusCode.ServiceUnavailable) };
         var logger = new CapturingLogger<NimClient>();
-        var client = new NimClient(api, Retries, Timeouts, TimeProvider.System, logger);
+        var client = new NimClient(api, Retries, Timeouts, NoPacing, TimeProvider.System, logger);
 
         _ = await client.SendChatAsync(RequestWithReasoning, ModelTier.Default, CancellationToken.None);
 
@@ -372,7 +375,7 @@ public sealed class NimClientTests
     {
         var api = new FakeNimApi { OnSendChat = static _ => new HttpResponseMessage(HttpStatusCode.ServiceUnavailable) };
         var logger = new CapturingLogger<NimClient>();
-        var client = new NimClient(api, Retries, Timeouts, TimeProvider.System, logger);
+        var client = new NimClient(api, Retries, Timeouts, NoPacing, TimeProvider.System, logger);
 
         _ = await client.SendChatAsync(RequestWithReasoning, ModelTier.Default, CancellationToken.None);
 
@@ -392,5 +395,5 @@ public sealed class NimClientTests
     /// <param name="api">The fake transport.</param>
     /// <returns>The client under test.</returns>
     private static NimClient Client(FakeNimApi api) =>
-        new(api, Retries, Timeouts, TimeProvider.System, NullLogger<NimClient>.Instance);
+        new(api, Retries, Timeouts, NoPacing, TimeProvider.System, NullLogger<NimClient>.Instance);
 }

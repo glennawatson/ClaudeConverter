@@ -553,7 +553,8 @@ public static class ResponsesEndpointExtensions
         CodexServices services,
         CancellationToken cancellationToken)
     {
-        if (NimRequestDowngrade.ForRejection(active.UpstreamRequest, translator.FailureStatusCode) is not { } lighter)
+        var errorText = services.Retries.ContentAwareDowngrade ? translator.FailureMessage : null;
+        if (NimRequestDowngrade.ForRejection(active.UpstreamRequest, translator.FailureStatusCode, errorText) is not { } lighter)
         {
             return null;
         }

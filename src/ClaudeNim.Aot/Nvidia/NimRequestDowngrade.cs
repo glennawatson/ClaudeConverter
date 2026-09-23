@@ -28,11 +28,21 @@ public static class NimRequestDowngrade
     /// </remarks>
     internal const int RungCount = 2;
 
+    /// <summary>The field name NVIDIA's own error text names when it rejects replayed reasoning.</summary>
+    private const string ReasoningContentField = "reasoning_content";
+
+    /// <summary>The field names NVIDIA's own error text names when it rejects the reasoning controls.</summary>
+    private static readonly string[] ReasoningControlFields = ["chat_template_kwargs", "reasoning_effort", "max_thinking_tokens", "nvext"];
+
     /// <summary>Walks the ladder one rung for a status that means the upstream rejected the request.</summary>
     /// <param name="request">The request to downgrade.</param>
     /// <param name="status">
     /// The status the rejection carried, whether it arrived as the call's own HTTP status or, for a
     /// streamed call, as the status an error payload inside an already-successful response reports.
+    /// </param>
+    /// <param name="errorText">
+    /// The upstream's own explanation of the rejection, or <see langword="null"/> to always walk the
+    /// ladder in its fixed order instead of reading it.
     /// </param>
     /// <returns>The downgraded request, or <see langword="null"/> when the status is not a rejection or nothing is left to strip.</returns>
     /// <remarks>
@@ -42,10 +52,31 @@ public static class NimRequestDowngrade
     /// streamed rejection is not left to exhaust the plain retry budget asking again with the exact
     /// body that was just refused.
     /// </remarks>
-    public static NimChatRequest? ForRejection(NimChatRequest request, int? status) =>
-        status is (int)HttpStatusCode.BadRequest or (int)HttpStatusCode.InternalServerError
-            ? WithoutReasoningControls(request) ?? WithoutReplayedReasoning(request)
-            : null;
+    public static NimChatRequest? ForRejection(NimChatRequest request, int? status, string? errorText)
+    {
+        if (status is not ((int)HttpStatusCode.BadRequest or (int)HttpStatusCode.InternalServerError))
+        {
+            return null;
+        }
+
+        if (!string.IsNullOrEmpty(errorText))
+        {
+            if (errorText.Contains(ReasoningContentField, StringComparison.OrdinalIgnoreCase))
+            {
+                return WithoutReplayedReasoning(request);
+            }
+
+            foreach (var field in ReasoningControlFields)
+            {
+                if (errorText.Contains(field, StringComparison.OrdinalIgnoreCase))
+                {
+                    return WithoutReasoningControls(request);
+                }
+            }
+        }
+
+        return WithoutReasoningControls(request) ?? WithoutReplayedReasoning(request);
+    }
 
     /// <summary>Removes the controls that ask the model to reason a particular way.</summary>
     /// <param name="request">The request to downgrade.</param>

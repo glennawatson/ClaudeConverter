@@ -12,6 +12,7 @@ namespace ClaudeNim.Aot.Nvidia;
 /// <param name="Api">The Refit-generated NIM surface.</param>
 /// <param name="Retries">The configured retry behaviour.</param>
 /// <param name="Timeouts">The configured upstream timeouts.</param>
+/// <param name="Pacer">Spaces every outbound call, so a fallback chain walk does not leave as a burst.</param>
 /// <param name="Time">The clock the backoff delays and timeouts are measured against.</param>
 /// <param name="Logger">The diagnostic log.</param>
 /// <remarks>
@@ -46,6 +47,7 @@ public sealed record NimClient(
     INimApi Api,
     RetryOptions Retries,
     HttpTimeoutOptions Timeouts,
+    IRequestPacer Pacer,
     TimeProvider Time,
     ILogger<NimClient> Logger) : INimClient
 {
@@ -81,7 +83,11 @@ public sealed record NimClient(
 
         for (var attempt = 1; attempt < ceiling && !response.IsSuccessStatusCode; attempt++)
         {
-            if (Downgrade(current, response.StatusCode) is { } lighter)
+            var errorText = Retries.ContentAwareDowngrade && IsRejection(response.StatusCode)
+                ? await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false)
+                : null;
+
+            if (Downgrade(current, response.StatusCode, errorText) is { } lighter)
             {
                 NvidiaLog.ChatTemplateRejected(Logger, current.Model);
                 response.Dispose();
@@ -147,18 +153,25 @@ public sealed record NimClient(
         return null;
     }
 
-    /// <summary>Finds the next rung of the downgrade ladder for a rejected request.</summary>
-    /// <param name="request">The request that was rejected.</param>
+    /// <summary>Determines whether a status means the upstream rejected the request rather than merely refused it for now.</summary>
     /// <param name="status">The status the upstream returned.</param>
-    /// <returns>A lighter request, or <see langword="null"/> when there is nothing left to drop.</returns>
+    /// <returns><see langword="true"/> when the status is one <see cref="NimRequestDowngrade.ForRejection"/> would act on.</returns>
     /// <remarks>
     /// A 500 counts as a rejection here as well as a 400. NVIDIA answers a request its schema
     /// validator cannot handle with an internal error rather than a bad request, so treating 500
     /// as purely transient would retry the same unacceptable body until the attempts ran out.
     /// </remarks>
     [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.AggressiveInlining)]
-    private static NimChatRequest? Downgrade(NimChatRequest request, HttpStatusCode status) =>
-        NimRequestDowngrade.ForRejection(request, (int)status);
+    private static bool IsRejection(HttpStatusCode status) => status is HttpStatusCode.BadRequest or HttpStatusCode.InternalServerError;
+
+    /// <summary>Finds the next rung of the downgrade ladder for a rejected request.</summary>
+    /// <param name="request">The request that was rejected.</param>
+    /// <param name="status">The status the upstream returned.</param>
+    /// <param name="errorText">The upstream's own explanation of the rejection, when it was read.</param>
+    /// <returns>A lighter request, or <see langword="null"/> when there is nothing left to drop.</returns>
+    [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.AggressiveInlining)]
+    private static NimChatRequest? Downgrade(NimChatRequest request, HttpStatusCode status, string? errorText) =>
+        NimRequestDowngrade.ForRejection(request, (int)status, errorText);
 
     /// <summary>Determines whether a failed attempt is worth making again.</summary>
     /// <param name="error">The exception the attempt raised.</param>
@@ -236,6 +249,8 @@ public sealed record NimClient(
 
         for (var attempt = 1; true; attempt++)
         {
+            await Pacer.WaitForTurnAsync(cancellationToken).ConfigureAwait(false);
+
             using var timeout = BoundedToken(budget, cancellationToken);
 
             try

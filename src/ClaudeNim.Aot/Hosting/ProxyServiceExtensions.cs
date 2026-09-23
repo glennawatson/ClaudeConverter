@@ -97,6 +97,7 @@ public static class ProxyServiceExtensions
             _ = services.AddSingleton(TimeProvider.System);
             _ = services.AddSingleton<IModelRouter, ModelRouter>();
             _ = services.AddSingleton<IRequestGate, RequestGate>();
+            _ = services.AddSingleton<IRequestPacer, RequestPacer>();
             _ = services.AddSingleton<INimClient, NimClient>();
             _ = services.AddSingleton<INimModelCatalog, NimModelCatalog>();
             _ = services.AddSingleton<IModelHealthTracker, ModelHealthTracker>();

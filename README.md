@@ -234,7 +234,7 @@ export CLAUDENIM_ModelRouting__EnableThinking=false
 | `Authentication` | The shared secret clients must present; empty disables the check |
 | `ModelRouting` | Which NIM model serves each Claude tier, and whether it reasons |
 | `ModelCatalog` | Listing cache lifetime and the sizes reported for unknown models |
-| `RateLimits` | Concurrency and sliding-window limits applied before the upstream |
+| `RateLimits` | Concurrency, sliding-window, and minimum-gap pacing limits applied before the upstream |
 | `Timeouts` | Upstream connect, header-wait, body-read, and stream-idle timeouts |
 | `Retries` | Retry attempts and exponential-backoff delay for transient upstream failures |
 | `ModelHealth` | How many failures put a model in cooldown, and how long the cooldown lasts |
@@ -343,6 +343,24 @@ A rejected request (`400`/`500`) is instead retried with progressively less of i
 controls first, then replayed reasoning — since a rejection means the upstream will never accept
 that exact body. A failure that arrives inside an already-successful streamed response is surfaced
 as an Anthropic `error` event rather than an empty turn.
+
+`Retries:ContentAwareDowngrade` (default on; the flat `CONTENT_AWARE_DOWNGRADE` form also works)
+reads the upstream's own rejection text first, rather than always trying reasoning controls before
+replayed reasoning: a message naming `reasoning_content` strips only the replayed trace, one naming
+`chat_template_kwargs`, `reasoning_effort`, `max_thinking_tokens` or `nvext` strips only the
+controls, and a rejection whose text names neither still falls back to the fixed order. Turning it
+off restores the fixed order unconditionally.
+
+### Outbound pacing
+
+A window and a concurrency ceiling both bound total volume, but neither stops several calls leaving
+at once: walking a fallback chain can ask three models within the same second and still sit well
+inside both. NVIDIA's free endpoints appear to react to that burst itself, not just the volume —
+`RateLimits:MinGapMilliseconds` (default 2000; the flat `MIN_GAP_MILLISECONDS` form also works)
+enforces a minimum spacing between every physical call this proxy makes, including retries and
+fallback-chain candidates, so traffic leaves at the same steady rate a single well-behaved client
+would produce. Set it to `0` to disable pacing and let the window and concurrency ceiling be the
+only bounds, as before.
 
 ### Fallback models
 

@@ -89,6 +89,9 @@ public static class EnvironmentConfigurationExtensions
         new("REQUESTS_PER_WINDOW", "RateLimits:RequestsPerWindow"),
         new("RATE_LIMIT_WINDOW_SECONDS", "RateLimits:WindowSeconds"),
         new("MAX_CONCURRENCY", "RateLimits:MaxConcurrency"),
+        new("MIN_GAP_MILLISECONDS", "RateLimits:MinGapMilliseconds"),
+
+        new("CONTENT_AWARE_DOWNGRADE", "Retries:ContentAwareDowngrade"),
 
         new("READ_TIMEOUT_SECONDS", "Timeouts:ReadSeconds"),
         new("CONNECT_TIMEOUT_SECONDS", "Timeouts:ConnectSeconds"),

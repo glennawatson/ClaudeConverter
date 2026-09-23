@@ -138,6 +138,9 @@ public sealed class NimStreamTranslator(
     /// </remarks>
     public int? FailureStatusCode => _failure?.Code;
 
+    /// <summary>Gets the upstream's own explanation of the mid-stream failure, once it has one.</summary>
+    public string? FailureMessage => _failure?.Message;
+
     /// <summary>Reads the upstream stream to completion, emitting Anthropic events as it goes.</summary>
     /// <param name="upstream">The NIM response body.</param>
     /// <param name="messageId">The identifier to report for the Anthropic message.</param>

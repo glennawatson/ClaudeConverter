@@ -18,6 +18,9 @@ public sealed class NimRequestDowngradeTests
     /// <summary>The reasoning budget used by the fixture that carries one.</summary>
     private const int ReasoningBudget = 32;
 
+    /// <summary>The replayed reasoning text used by the fixtures that carry one.</summary>
+    private const string ReplayedReasoning = "because";
+
     /// <summary>Reasoning controls are removed when present.</summary>
     /// <returns>A task that completes when the assertions have run.</returns>
     [Test]
@@ -48,7 +51,7 @@ public sealed class NimRequestDowngradeTests
             Messages =
             [
                 new(NimChatMessage.UserRole, NimContent.FromText("hi")),
-                new(NimChatMessage.AssistantRole, NimContent.FromText("ok"), ReasoningContent: "because"),
+                new(NimChatMessage.AssistantRole, NimContent.FromText("ok"), ReasoningContent: ReplayedReasoning),
             ],
         };
 
@@ -67,6 +70,72 @@ public sealed class NimRequestDowngradeTests
 
         await Assert.That(NimRequestDowngrade.WithoutReplayedReasoning(request)).IsNull();
     }
+
+    /// <summary>A status outside the rejection set is never downgraded, regardless of the error text.</summary>
+    /// <returns>A task that completes when the assertion has run.</returns>
+    [Test]
+    public async Task ReturnsNullForAStatusThatIsNotARejection() =>
+        await Assert.That(NimRequestDowngrade.ForRejection(WithReasoningControls(), status: 503, "reasoning_effort")).IsNull();
+
+    /// <summary>Error text naming the replayed-reasoning field strips only that, skipping reasoning controls.</summary>
+    /// <returns>A task that completes when the assertions have run.</returns>
+    [Test]
+    public async Task ErrorTextNamingReasoningContentStripsOnlyReplayedReasoning()
+    {
+        var request = WithReasoningControls() with
+        {
+            Messages = [new(NimChatMessage.AssistantRole, NimContent.FromText("ok"), ReasoningContent: ReplayedReasoning)],
+        };
+
+        var lighter = NimRequestDowngrade.ForRejection(request, status: 400, "Unknown field: reasoning_content");
+
+        await Assert.That(lighter).IsNotNull();
+        await Assert.That(NoMessageCarriesReasoning(lighter!)).IsTrue();
+        await Assert.That(lighter!.ReasoningEffort).IsEqualTo("low");
+    }
+
+    /// <summary>Error text naming a reasoning-control field strips the controls, not replayed reasoning.</summary>
+    /// <returns>A task that completes when the assertions have run.</returns>
+    [Test]
+    public async Task ErrorTextNamingAReasoningControlFieldStripsOnlyThoseControls()
+    {
+        var request = WithReasoningControls() with
+        {
+            Messages = [new(NimChatMessage.AssistantRole, NimContent.FromText("ok"), ReasoningContent: ReplayedReasoning)],
+        };
+
+        var lighter = NimRequestDowngrade.ForRejection(request, status: 400, "Unknown field: chat_template_kwargs");
+
+        await Assert.That(lighter).IsNotNull();
+        await Assert.That(lighter!.ReasoningEffort).IsNull();
+        await Assert.That(lighter.Messages[0].ReasoningContent).IsEqualTo(ReplayedReasoning);
+    }
+
+    /// <summary>Error text naming nothing recognised still falls back to the fixed ladder.</summary>
+    /// <returns>A task that completes when the assertions have run.</returns>
+    [Test]
+    public async Task UnrecognisedErrorTextFallsBackToTheFixedLadder()
+    {
+        var lighter = NimRequestDowngrade.ForRejection(WithReasoningControls(), status: 400, "Invalid request");
+
+        await Assert.That(lighter).IsNotNull();
+        await Assert.That(lighter!.ReasoningEffort).IsNull();
+    }
+
+    /// <summary>No error text at all still falls back to the fixed ladder.</summary>
+    /// <returns>A task that completes when the assertions have run.</returns>
+    [Test]
+    public async Task NoErrorTextFallsBackToTheFixedLadder()
+    {
+        var lighter = NimRequestDowngrade.ForRejection(WithReasoningControls(), status: 400, errorText: null);
+
+        await Assert.That(lighter).IsNotNull();
+        await Assert.That(lighter!.ReasoningEffort).IsNull();
+    }
+
+    /// <summary>Builds a request carrying reasoning controls but no replayed reasoning.</summary>
+    /// <returns>The request.</returns>
+    private static NimChatRequest WithReasoningControls() => Request() with { ReasoningEffort = "low" };
 
     /// <summary>Builds a minimal request.</summary>
     /// <returns>The request.</returns>

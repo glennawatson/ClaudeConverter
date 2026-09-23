@@ -18,6 +18,9 @@ public sealed class ResponsesStreamTranslator(CodexStreamTranslator inner) : ISt
     public int? FailureStatusCode => inner.FailureStatusCode;
 
     /// <inheritdoc/>
+    public string? FailureMessage => inner.FailureMessage;
+
+    /// <inheritdoc/>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public ValueTask<StreamTurnOutcome> TranslateAsync(
         Stream upstream,

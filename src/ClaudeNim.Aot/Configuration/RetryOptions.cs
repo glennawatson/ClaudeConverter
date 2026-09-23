@@ -8,6 +8,10 @@ namespace ClaudeNim.Aot.Configuration;
 /// <param name="BaseDelayMilliseconds">The delay before the first retry, doubled on each attempt.</param>
 /// <param name="MaxDelayMilliseconds">The ceiling the doubling is clamped to.</param>
 /// <param name="UseJitter">Whether each delay is spread randomly across its window.</param>
+/// <param name="ContentAwareDowngrade">
+/// Whether a rejected request is downgraded by reading what the upstream's own error names, rather
+/// than always trying the same rung first.
+/// </param>
 /// <remarks>
 /// <para>
 /// Only failures that stand a chance of succeeding on a second attempt are retried; a rejected
@@ -26,13 +30,22 @@ namespace ClaudeNim.Aot.Configuration;
 /// a doubling delay spend around fifteen seconds before giving up, which is shorter than the turn
 /// the client is waiting on and long enough for a saturation spike to pass.
 /// </para>
+/// <para>
+/// A rejection's own text usually names the field it did not like — <c>reasoning_content</c> on a
+/// replayed assistant turn, or <c>chat_template_kwargs</c>/<c>reasoning_effort</c>/<c>nvext</c> on
+/// the controls asking the model to reason a particular way. Reading it first means the one rung
+/// that actually applies is tried, rather than always trying the same rung and only reaching the
+/// right one on a second round trip. A rejection whose text names nothing recognised still falls
+/// back to trying reasoning controls first, then replayed reasoning, exactly as before.
+/// </para>
 /// </remarks>
 [System.Diagnostics.DebuggerDisplay("RetryOptions: {ToString(),nq}")]
 public sealed record RetryOptions(
     int MaxAttempts = 5,
     int BaseDelayMilliseconds = 1_000,
     int MaxDelayMilliseconds = 30_000,
-    bool UseJitter = true)
+    bool UseJitter = true,
+    bool ContentAwareDowngrade = true)
 {
     /// <summary>The configuration section these options are bound from.</summary>
     internal const string SectionName = "Retries";
