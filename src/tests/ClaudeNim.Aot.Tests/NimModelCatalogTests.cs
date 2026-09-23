@@ -263,6 +263,29 @@ public sealed class NimModelCatalogTests
         await Assert.That(missing).IsNull();
     }
 
+    /// <summary>DeepSeek V4.1 Flash is profiled as not reasoning-capable, and advertised as one variant.</summary>
+    /// <returns>A task that completes when the assertions have run.</returns>
+    /// <remarks>
+    /// This is a regression test for a live defect: the profile once claimed this model supported
+    /// thinking, but NVIDIA's endpoint for it has rejected the reasoning controls on every observed
+    /// attempt — so the client-facing capability listing was telling callers something untrue.
+    /// </remarks>
+    [Test]
+    public async Task DeepSeekV41FlashIsNotAdvertisedAsReasoningCapable()
+    {
+        const string DeepSeekModel = "deepseek-ai/deepseek-v4.1-flash";
+
+        await Assert.That(NimModelCatalogDefaults.SupportsThinking(DeepSeekModel)).IsFalse();
+
+        var client = new FakeNimClient { OnListModels = static () => new([new(DeepSeekModel)]) };
+        using var catalog = Catalog(client);
+
+        var models = await catalog.GetModelsAsync(CancellationToken.None);
+        var matching = models.FindAll(static model => model.Id.Contains("deepseek", StringComparison.OrdinalIgnoreCase));
+
+        await Assert.That(matching.Count).IsEqualTo(1);
+    }
+
     /// <summary>Builds a catalogue wired to a fake client with a long-lived cache.</summary>
     /// <param name="client">The fake client.</param>
     /// <returns>The catalogue under test.</returns>

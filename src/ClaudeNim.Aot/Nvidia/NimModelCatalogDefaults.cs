@@ -83,7 +83,12 @@ public static class NimModelCatalogDefaults
         new("z-ai/glm-5.3", "GLM 5.3", true, false, true, MillionTokenContext),
         new("z-ai/glm-5.3-flash", "GLM 5.3 Flash", true, true, true, MillionTokenContext),
         new("moonshotai/kimi-k3", "Kimi K3", true, true, true, MillionTokenContext),
-        new("deepseek-ai/deepseek-v4.1-flash", "DeepSeek V4.1 Flash", true, false, true, MillionTokenContext),
+
+        // SupportsThinking is false here, unlike every other entry it sits next to: this proxy's
+        // own downgrade ladder has observed NVIDIA reject this model's reasoning controls on every
+        // attempt, never once accepting them — so the profile is corrected to match what the
+        // endpoint actually does rather than what the model's name would suggest.
+        new("deepseek-ai/deepseek-v4.1-flash", "DeepSeek V4.1 Flash", true, false, false, MillionTokenContext),
         new("meta/muse-glimmer-30b", "Muse Glimmer 30B", true, true, true, OneTwentyEightKContext),
         new("poolside/laguna-xs-2.1", "Laguna XS 2.1", true, false, true, QuarterMillionContext),
         new("google/gemma-4-31b-it", "Gemma 4 31B IT", true, false, false, QuarterMillionContext),
