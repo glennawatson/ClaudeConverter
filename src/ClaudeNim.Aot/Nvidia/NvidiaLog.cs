@@ -458,6 +458,22 @@ internal static partial class NvidiaLog
         Message = "NVIDIA refused this proxy's own credential with status {Status} for {Model}; every turn will fail until the key is replaced. Upstream said: {Body}")]
     internal static partial void UpstreamCredentialRejected(ILogger logger, string model, int status, string body);
 
+    /// <summary>Records that a cooling-down model was skipped without spending an attempt on it.</summary>
+    /// <param name="logger">The log to write to.</param>
+    /// <param name="model">The model being skipped.</param>
+    /// <param name="fallback">The model being tried instead.</param>
+    /// <remarks>
+    /// Distinguished from <see cref="FallingBackToAnotherModel"/> deliberately: that line means a
+    /// real attempt just failed, and this one means no attempt was made at all, because the last one
+    /// or more already failed enough times in a row that asking again so soon was not worth the
+    /// turn's own patience.
+    /// </remarks>
+    [LoggerMessage(
+        EventId = 1032,
+        Level = LogLevel.Warning,
+        Message = "{Model} is cooling down after repeated failures; trying {Fallback} instead without asking it again yet.")]
+    internal static partial void SkippingCoolingDownModel(ILogger logger, string model, string fallback);
+
     /// <summary>Records that the proxy's own rate limit turned away a turn before it reached NIM.</summary>
     /// <param name="logger">The log to write to.</param>
     /// <param name="model">The NIM model the turn would have been sent to.</param>

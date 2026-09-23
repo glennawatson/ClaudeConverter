@@ -18,6 +18,7 @@ namespace ClaudeNim.Aot.Endpoints.Codex;
 /// <param name="Catalog">The sizing the advertised listing is built from, which also bounds a turn.</param>
 /// <param name="CompletionTranslator">Turns a completed upstream completion into a Responses API turn.</param>
 /// <param name="StreamTranslatorFactory">Builds the translator each streamed attempt is served through.</param>
+/// <param name="ModelHealth">Tracks which models are cooling down, so a fallback chain can skip them.</param>
 /// <param name="Timeouts">The configured upstream timeouts.</param>
 /// <param name="Time">The clock a re-issued streamed turn's backoff is measured against.</param>
 /// <param name="Logger">The diagnostic log.</param>
@@ -34,6 +35,7 @@ public sealed record CodexServices(
     ModelCatalogOptions Catalog,
     ICompletionTranslator CompletionTranslator,
     IStreamTranslatorFactory StreamTranslatorFactory,
+    IModelHealthTracker ModelHealth,
     HttpTimeoutOptions Timeouts,
     TimeProvider Time,
     ILogger<CodexServices> Logger);

@@ -51,6 +51,9 @@ public sealed class MessagesEndpointExtensionsTests
     /// <summary>The number of upstream calls a turn takes when a one-model chain is walked and then waited out.</summary>
     private const int CallsAfterExhaustedChain = 3;
 
+    /// <summary>The reply text a fallback fixture's upstream answers with.</summary>
+    private const string ServedResponseText = "served";
+
     /// <summary>Retry settings whose backoff is short enough that a re-issued turn does not slow the suite.</summary>
     private static readonly RetryOptions FastRetries = new(BaseDelayMilliseconds: 1, MaxDelayMilliseconds: 2, UseJitter: false);
 
@@ -199,7 +202,7 @@ public sealed class MessagesEndpointExtensionsTests
     public async Task UnavailableModelIsReplacedByItsFallback()
     {
         var completion = new NimChatCompletion(
-            Choices: [new NimChoice(Message: new NimChatMessage(AssistantRole, NimContent.FromText("served")))]);
+            Choices: [new NimChoice(Message: new NimChatMessage(AssistantRole, NimContent.FromText(ServedResponseText)))]);
 
         var client = new FakeNimClient
         {
@@ -219,7 +222,7 @@ public sealed class MessagesEndpointExtensionsTests
 
         var message = ((JsonHttpResult<MessagesResponse>)result!).Value!;
 
-        await Assert.That(message.Content[0].Text).IsEqualTo("served");
+        await Assert.That(message.Content[0].Text).IsEqualTo(ServedResponseText);
         await Assert.That(client.Requests.Count).IsEqualTo(CallsAfterOneFallback);
         await Assert.That(client.Requests[1].Model).IsEqualTo(FallbackModel);
     }
@@ -250,6 +253,41 @@ public sealed class MessagesEndpointExtensionsTests
         await Assert.That(client.Budgets[1]).IsEqualTo(1);
         await Assert.That(client.Budgets[2]).IsGreaterThan(1);
         await Assert.That(client.Requests[2].Model).IsEqualTo(UpstreamModel);
+    }
+
+    /// <summary>A model that has failed repeatedly across turns is skipped, without an upstream call, until its cooldown lifts.</summary>
+    /// <returns>A task that completes when the assertions have run.</returns>
+    /// <remarks>
+    /// A model that has gone inactive for a while otherwise costs every turn a wasted call and a
+    /// retry wait before the chain reaches a model that is actually up. Once the routed model has
+    /// failed enough times in a row, a later turn should go straight to its fallback instead.
+    /// </remarks>
+    [Test]
+    public async Task RepeatedlyFailingModelIsSkippedWithoutAnUpstreamCall()
+    {
+        var modelHealth = new ModelHealthTracker(new ModelHealthOptions(), TimeProvider.System);
+        var completion = new NimChatCompletion(
+            Choices: [new NimChoice(Message: new NimChatMessage(AssistantRole, NimContent.FromText(ServedResponseText)))]);
+        var client = new FakeNimClient
+        {
+            OnSendChat = request => request.Model == UpstreamModel
+                ? new HttpResponseMessage(HttpStatusCode.ServiceUnavailable)
+                : JsonResponse(HttpStatusCode.OK, completion),
+        };
+        var services = Services(client, FallbackModel, modelHealth);
+        List<AnthropicMessage> messages = [new(AnthropicMessage.UserRole, MessageContent.FromText(OrdinaryUserText))];
+        var request = new MessagesRequest(ClaudeModel, messages, OrdinaryMaxTokens);
+
+        _ = await MessagesEndpointExtensions.SendMessageAsync(request, Context(), services, CancellationToken.None);
+        _ = await MessagesEndpointExtensions.SendMessageAsync(request, Context(), services, CancellationToken.None);
+        var callsBeforeCooldown = client.Requests.Count;
+
+        var result = await MessagesEndpointExtensions.SendMessageAsync(request, Context(), services, CancellationToken.None);
+
+        var message = ((JsonHttpResult<MessagesResponse>)result!).Value!;
+        await Assert.That(message.Content[0].Text).IsEqualTo(ServedResponseText);
+        await Assert.That(client.Requests.Count).IsEqualTo(callsBeforeCooldown + 1);
+        await Assert.That(client.Requests[^1].Model).IsEqualTo(FallbackModel);
     }
 
     /// <summary>A refused credential is reported at error, where every other rejection is a warning.</summary>
@@ -597,6 +635,7 @@ public sealed class MessagesEndpointExtensionsTests
             new AnthropicRequestOptimizer(new OptimizationOptions()),
             new AnthropicCompletionTranslator(NullLogger<AnthropicCompletionTranslator>.Instance),
             new AnthropicStreamTranslatorFactory(),
+            new ModelHealthTracker(new ModelHealthOptions(), TimeProvider.System),
             new HttpTimeoutOptions(),
             TimeProvider.System,
             NullLogger<MessageServices>.Instance);
@@ -618,6 +657,7 @@ public sealed class MessagesEndpointExtensionsTests
             new AnthropicRequestOptimizer(new OptimizationOptions()),
             new AnthropicCompletionTranslator(NullLogger<AnthropicCompletionTranslator>.Instance),
             new AnthropicStreamTranslatorFactory(),
+            new ModelHealthTracker(new ModelHealthOptions(), TimeProvider.System),
             new HttpTimeoutOptions(),
             TimeProvider.System,
             logger ?? NullLogger<MessageServices>.Instance);
@@ -638,9 +678,32 @@ public sealed class MessagesEndpointExtensionsTests
             new AnthropicRequestOptimizer(new OptimizationOptions()),
             new AnthropicCompletionTranslator(NullLogger<AnthropicCompletionTranslator>.Instance),
             new AnthropicStreamTranslatorFactory(),
+            new ModelHealthTracker(new ModelHealthOptions(), TimeProvider.System),
             new HttpTimeoutOptions(),
             TimeProvider.System,
             logger);
+
+    /// <summary>Builds the services a turn is served from, with a fallback chain and a caller-supplied health tracker.</summary>
+    /// <param name="client">The fake upstream client.</param>
+    /// <param name="fallback">The model the routed one steps aside for.</param>
+    /// <param name="modelHealth">The tracker to share across the calls under test.</param>
+    /// <returns>The services.</returns>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static MessageServices Services(FakeNimClient client, string fallback, IModelHealthTracker modelHealth) =>
+        new(
+            new FakeModelRouter(new(ClaudeModel, UpstreamModel, ModelTier.Sonnet, true, [fallback])),
+            client,
+            new RequestGate(new RateLimitOptions(RequestsPerWindow: 0, MaxConcurrency: 0)),
+            new NvidiaNimOptions(),
+            FastRetries,
+            new ModelCatalogOptions(),
+            new AnthropicRequestOptimizer(new OptimizationOptions()),
+            new AnthropicCompletionTranslator(NullLogger<AnthropicCompletionTranslator>.Instance),
+            new AnthropicStreamTranslatorFactory(),
+            modelHealth,
+            new HttpTimeoutOptions(),
+            TimeProvider.System,
+            NullLogger<MessageServices>.Instance);
 
     /// <summary>Builds a JSON-bodied response for a completed upstream call.</summary>
     /// <summary>Wraps a raw server-sent event body as a successful upstream response.</summary>

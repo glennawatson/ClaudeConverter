@@ -19,12 +19,13 @@ namespace ClaudeNim.Aot.Endpoints.Anthropic;
 /// <param name="Optimizer">Answers a request's housekeeping turns locally, when it recognises one.</param>
 /// <param name="CompletionTranslator">Turns a completed upstream completion into an Anthropic message.</param>
 /// <param name="StreamTranslatorFactory">Builds the translator each streamed attempt is served through.</param>
+/// <param name="ModelHealth">Tracks which models are cooling down, so a fallback chain can skip them.</param>
 /// <param name="Timeouts">The configured upstream timeouts.</param>
 /// <param name="Time">The clock a re-issued streamed turn's backoff is measured against.</param>
 /// <param name="Logger">The diagnostic log.</param>
 /// <remarks>
-/// The handler takes this one parameter rather than nine. A minimal API endpoint's signature is
-/// its dependency list, and nine of them makes the shape of the turn harder to read than the code
+/// The handler takes this one parameter rather than ten. A minimal API endpoint's signature is
+/// its dependency list, and ten of them makes the shape of the turn harder to read than the code
 /// that serves it.
 /// </remarks>
 public sealed record MessageServices(
@@ -37,6 +38,7 @@ public sealed record MessageServices(
     IRequestOptimizer Optimizer,
     ICompletionTranslator CompletionTranslator,
     IStreamTranslatorFactory StreamTranslatorFactory,
+    IModelHealthTracker ModelHealth,
     HttpTimeoutOptions Timeouts,
     TimeProvider Time,
     ILogger<MessageServices> Logger);

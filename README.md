@@ -237,6 +237,7 @@ export CLAUDENIM_ModelRouting__EnableThinking=false
 | `RateLimits` | Concurrency and sliding-window limits applied before the upstream |
 | `Timeouts` | Upstream connect, header-wait, body-read, and stream-idle timeouts |
 | `Retries` | Retry attempts and exponential-backoff delay for transient upstream failures |
+| `ModelHealth` | How many failures put a model in cooldown, and how long the cooldown lasts |
 | `Optimizations` | The local fast paths for Claude Code's housekeeping requests |
 
 ### Model discovery
@@ -371,6 +372,24 @@ named by its gateway identifier get a chain — the client picked that model fro
 proxy advertised, and answering as a different one is not a substitution it asked for. Every
 substitution is logged at warning naming both models, because the tier the client asked for is now
 being served by something else, usually weaker.
+
+### Cooling down a failing model
+
+A model that has gone entirely offline is a different problem from one that is merely busy: a busy
+model returns `429` and the next request has a real chance, but an offline one fails the same way
+every time, so the walk down the chain keeps paying for a call and a retry wait it already knows
+the answer to. After `ModelHealth:FailureThreshold` consecutive failures (default 2), a model is put
+in cooldown for `ModelHealth:CooldownSeconds` (default 150) — or the flat `MODEL_FAILURE_THRESHOLD`
+and `MODEL_COOLDOWN_SECONDS` forms — and a chain walk skips it without an upstream call until the
+cooldown lifts, logging that it did so rather than the ordinary fallback warning. A single success
+clears a model's cooldown and its failure count immediately, so a model does not sit out any longer
+than it has already proven it needs to.
+
+Cooldown is tracked per model, not per tier, so a model named in more than one tier's chain only
+needs to earn its way out once. It never blocks every model at once either: the last-resort call a
+chain makes to the tier's own routed model when every fallback has failed is not itself skipped for
+being in cooldown, so a turn can still succeed the ordinary way even while its whole chain is
+cooling down.
 
 ### Following a turn through the log
 

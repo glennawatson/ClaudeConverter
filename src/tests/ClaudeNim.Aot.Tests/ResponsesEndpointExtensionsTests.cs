@@ -161,6 +161,7 @@ public sealed class ResponsesEndpointExtensionsTests
             new ModelCatalogOptions(),
             new ResponsesCompletionTranslator(TimeProvider.System, NullLogger<ResponsesCompletionTranslator>.Instance),
             new ResponsesStreamTranslatorFactory(TimeProvider.System),
+            new ModelHealthTracker(new ModelHealthOptions(), TimeProvider.System),
             new HttpTimeoutOptions(),
             TimeProvider.System,
             NullLogger<CodexServices>.Instance);

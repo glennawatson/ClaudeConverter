@@ -165,7 +165,7 @@ public static class ResponsesEndpointExtensions
         if (alternatives.Count == 0)
         {
             reportAttempt(turn.Resolved.NimModel);
-            return new(turn, await services.Client.SendChatAsync(turn.UpstreamRequest, turn.Resolved.Tier, cancellationToken).ConfigureAwait(false));
+            return new(turn, await SendDirectAsync(turn, services, cancellationToken).ConfigureAwait(false));
         }
 
         var current = turn;
@@ -181,7 +181,16 @@ public static class ResponsesEndpointExtensions
             }
 
             var next = alternatives[candidate];
-            NvidiaLog.FallingBackToAnotherModel(services.Logger, current.Resolved.NimModel, next, attempt.Status);
+
+            if (attempt.InCooldown)
+            {
+                NvidiaLog.SkippingCoolingDownModel(services.Logger, current.Resolved.NimModel, next);
+            }
+            else
+            {
+                NvidiaLog.FallingBackToAnotherModel(services.Logger, current.Resolved.NimModel, next, attempt.Status);
+            }
+
             current = Rerouted(turn, services, next, Remaining(alternatives, candidate + 1));
         }
 
@@ -193,10 +202,35 @@ public static class ResponsesEndpointExtensions
             return new(current, served);
         }
 
+        // Everything was busy, or every candidate was cooling down from having just been. Asking
+        // the routed model directly here, rather than through TryOnceAsync, is deliberate: cooldown
+        // only ever governs the fast walk above, not the last resort, so a chain that looks entirely
+        // dead is still asked for real rather than given up on outright.
         NvidiaLog.EveryModelUnavailable(services.Logger, turn.Resolved.NimModel, alternatives.Count + 1);
 
         reportAttempt(turn.Resolved.NimModel);
-        return new(turn, await services.Client.SendChatAsync(turn.UpstreamRequest, turn.Resolved.Tier, cancellationToken).ConfigureAwait(false));
+        return new(turn, await SendDirectAsync(turn, services, cancellationToken).ConfigureAwait(false));
+    }
+
+    /// <summary>Sends a turn to the model it names directly, bypassing cooldown, and records the outcome.</summary>
+    /// <param name="turn">The turn to send.</param>
+    /// <param name="services">The services the turn is served from.</param>
+    /// <param name="cancellationToken">Abandons the turn when the client disconnects.</param>
+    /// <returns>The upstream response.</returns>
+    private static async Task<HttpResponseMessage> SendDirectAsync(CodexTurnContext turn, CodexServices services, CancellationToken cancellationToken)
+    {
+        var response = await services.Client.SendChatAsync(turn.UpstreamRequest, turn.Resolved.Tier, cancellationToken).ConfigureAwait(false);
+
+        if (response.IsSuccessStatusCode)
+        {
+            services.ModelHealth.MarkAvailable(turn.Resolved.NimModel);
+        }
+        else
+        {
+            services.ModelHealth.MarkUnavailable(turn.Resolved.NimModel);
+        }
+
+        return response;
     }
 
     /// <summary>Makes one attempt at a turn, reporting an unavailable model as no answer at all.</summary>
@@ -209,6 +243,13 @@ public static class ResponsesEndpointExtensions
         CodexServices services,
         CancellationToken cancellationToken)
     {
+        var model = turn.Resolved.NimModel;
+
+        if (services.ModelHealth.IsInCooldown(model))
+        {
+            return new(null, 0, InCooldown: true);
+        }
+
         HttpResponseMessage response;
         try
         {
@@ -218,8 +259,14 @@ public static class ResponsesEndpointExtensions
         }
         catch (Exception error) when (IsUpstreamTransportFailure(error) && !cancellationToken.IsCancellationRequested)
         {
-            NvidiaLog.LogUpstreamTransportFailure(services.Logger, turn.Resolved.NimModel, error);
+            NvidiaLog.LogUpstreamTransportFailure(services.Logger, model, error);
+            services.ModelHealth.MarkUnavailable(model);
             return new(null, 0);
+        }
+
+        if (response.IsSuccessStatusCode)
+        {
+            services.ModelHealth.MarkAvailable(model);
         }
 
         if (!RetrySchedule.IsTransient(response.StatusCode))
@@ -229,6 +276,7 @@ public static class ResponsesEndpointExtensions
 
         var status = (int)response.StatusCode;
         response.Dispose();
+        services.ModelHealth.MarkUnavailable(model);
 
         return new(null, status);
     }

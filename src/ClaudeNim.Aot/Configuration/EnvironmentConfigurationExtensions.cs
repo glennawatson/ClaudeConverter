@@ -98,6 +98,9 @@ public static class EnvironmentConfigurationExtensions
         new("SONNET_READ_TIMEOUT_SECONDS", "Timeouts:SonnetReadSeconds"),
         new("HAIKU_READ_TIMEOUT_SECONDS", "Timeouts:HaikuReadSeconds"),
 
+        new("MODEL_FAILURE_THRESHOLD", "ModelHealth:FailureThreshold"),
+        new("MODEL_COOLDOWN_SECONDS", "ModelHealth:CooldownSeconds"),
+
         new("MOCK_QUOTA_PROBE", "Optimizations:MockQuotaProbe"),
         new("SKIP_TITLE_GENERATION", "Optimizations:SkipTitleGeneration"),
         new("SKIP_SUGGESTION_MODE", "Optimizations:SkipSuggestionMode"),

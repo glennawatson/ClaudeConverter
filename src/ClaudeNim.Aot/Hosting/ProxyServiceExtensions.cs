@@ -90,12 +90,16 @@ public static class ProxyServiceExtensions
             _ = services.AddSingleton(
                 configuration.GetSection(RetryOptions.SectionName).Get<RetryOptions>()
                 ?? new RetryOptions());
+            _ = services.AddSingleton(
+                configuration.GetSection(ModelHealthOptions.SectionName).Get<ModelHealthOptions>()
+                ?? new ModelHealthOptions());
 
             _ = services.AddSingleton(TimeProvider.System);
             _ = services.AddSingleton<IModelRouter, ModelRouter>();
             _ = services.AddSingleton<IRequestGate, RequestGate>();
             _ = services.AddSingleton<INimClient, NimClient>();
             _ = services.AddSingleton<INimModelCatalog, NimModelCatalog>();
+            _ = services.AddSingleton<IModelHealthTracker, ModelHealthTracker>();
 
             // Each protocol registers its own IRequestOptimizer (or none, if it has no housekeeping
             // traffic worth recognising), ICompletionTranslator and IStreamTranslatorFactory behind
