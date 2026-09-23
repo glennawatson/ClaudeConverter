@@ -276,6 +276,44 @@ public sealed class MessagesEndpointExtensionsTests
         await Assert.That(refused.Level).IsEqualTo(LogLevel.Error);
     }
 
+    /// <summary>A client that abandons a turn mid-fallback is reported against the model actually in flight.</summary>
+    /// <returns>A task that completes when the assertions have run.</returns>
+    /// <remarks>
+    /// This is a regression test for a live defect: the abandonment line named the model routing
+    /// started at, not the fallback model the client was actually left waiting on, because
+    /// deconstructing the fallback call's result into <c>turn</c> never runs when that call throws.
+    /// </remarks>
+    [Test]
+    public async Task ClientAbandonmentDuringFallbackNamesTheModelInFlight()
+    {
+        using var cts = new CancellationTokenSource();
+        var client = new FakeNimClient();
+        client.OnSendChat = _ =>
+        {
+            if (client.Requests.Count == 1)
+            {
+                return new HttpResponseMessage(HttpStatusCode.ServiceUnavailable);
+            }
+
+            cts.Cancel();
+            throw new TaskCanceledException();
+        };
+
+        List<AnthropicMessage> messages = [new(AnthropicMessage.UserRole, MessageContent.FromText(OrdinaryUserText))];
+        var request = new MessagesRequest(ClaudeModel, messages, OrdinaryMaxTokens);
+        var logger = new CapturingLogger<MessageServices>();
+
+        await Assert.That(async () =>
+                await MessagesEndpointExtensions.SendMessageAsync(request, Context(), Services(client, FallbackModel, logger), cts.Token))
+            .Throws<TaskCanceledException>();
+
+        var abandoned = logger.Messages.Find(static m => m.Contains("gave up", StringComparison.Ordinal));
+
+        await Assert.That(abandoned).IsNotNull();
+        await Assert.That(abandoned!).Contains(FallbackModel);
+        await Assert.That(abandoned).DoesNotContain(UpstreamModel);
+    }
+
     /// <summary>A spent chain says so, rather than leaving the log at the last model it tried.</summary>
     /// <returns>A task that completes when the assertions have run.</returns>
     /// <remarks>

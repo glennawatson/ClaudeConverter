@@ -89,16 +89,24 @@ public static class ResponsesEndpointExtensions
 
         var started = Stopwatch.GetTimestamp();
 
+        // Walking the fallback chain changes which model is actually in flight, and a client can
+        // cancel while any one of them is being asked. Deconstruction only updates turn once
+        // SendWithFallbackAsync returns, so a cancellation mid-chain would otherwise be reported
+        // against the model routing started at rather than the one the client was actually left
+        // waiting on.
+        var inFlightModel = turn.Resolved.NimModel;
+
         HttpResponseMessage response;
         try
         {
-            (turn, response) = await SendWithFallbackAsync(turn, services, cancellationToken).ConfigureAwait(false);
+            (turn, response) = await SendWithFallbackAsync(turn, services, model => inFlightModel = model, cancellationToken)
+                .ConfigureAwait(false);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
             NvidiaLog.ClientAbandonedTurn(
                 services.Logger,
-                turn.Resolved.NimModel,
+                inFlightModel,
                 (long)Stopwatch.GetElapsedTime(started).TotalMilliseconds);
             throw;
         }
@@ -143,17 +151,20 @@ public static class ResponsesEndpointExtensions
     /// <summary>Sends a turn, walking the tier's fallback chain while the upstream is unavailable.</summary>
     /// <param name="turn">The turn being served, as routing left it.</param>
     /// <param name="services">The services the turn is served from.</param>
+    /// <param name="reportAttempt">Told the model about to be asked, before each attempt that may be cancelled.</param>
     /// <param name="cancellationToken">Abandons the turn when the client disconnects.</param>
     /// <returns>The turn as the model that answered it left it, and that model's response.</returns>
     private static async Task<CodexTurnAttempt> SendWithFallbackAsync(
         CodexTurnContext turn,
         CodexServices services,
+        Action<string> reportAttempt,
         CancellationToken cancellationToken)
     {
         var alternatives = turn.Resolved.Alternatives;
 
         if (alternatives.Count == 0)
         {
+            reportAttempt(turn.Resolved.NimModel);
             return new(turn, await services.Client.SendChatAsync(turn.UpstreamRequest, turn.Resolved.Tier, cancellationToken).ConfigureAwait(false));
         }
 
@@ -161,6 +172,7 @@ public static class ResponsesEndpointExtensions
 
         for (var candidate = 0; candidate < alternatives.Count; candidate++)
         {
+            reportAttempt(current.Resolved.NimModel);
             var attempt = await TryOnceAsync(current, services, cancellationToken).ConfigureAwait(false);
 
             if (attempt.Response is { } answered)
@@ -173,6 +185,7 @@ public static class ResponsesEndpointExtensions
             current = Rerouted(turn, services, next, Remaining(alternatives, candidate + 1));
         }
 
+        reportAttempt(current.Resolved.NimModel);
         var last = await TryOnceAsync(current, services, cancellationToken).ConfigureAwait(false);
 
         if (last.Response is { } served)
@@ -182,6 +195,7 @@ public static class ResponsesEndpointExtensions
 
         NvidiaLog.EveryModelUnavailable(services.Logger, turn.Resolved.NimModel, alternatives.Count + 1);
 
+        reportAttempt(turn.Resolved.NimModel);
         return new(turn, await services.Client.SendChatAsync(turn.UpstreamRequest, turn.Resolved.Tier, cancellationToken).ConfigureAwait(false));
     }
 
@@ -381,7 +395,7 @@ public static class ResponsesEndpointExtensions
                 var backoff = RetrySchedule.Delay(attempt, services.Retries, retryAfter: null, services.Time.GetUtcNow());
                 await Task.Delay(backoff, services.Time, cancellationToken).ConfigureAwait(false);
 
-                var reissued = await SendWithFallbackAsync(active, services, cancellationToken).ConfigureAwait(false);
+                var reissued = await SendWithFallbackAsync(active, services, static _ => { }, cancellationToken).ConfigureAwait(false);
                 active = reissued.Turn;
                 current = reissued.Response;
                 owned = true;
