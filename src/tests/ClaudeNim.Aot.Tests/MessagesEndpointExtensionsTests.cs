@@ -738,7 +738,8 @@ public sealed class MessagesEndpointExtensionsTests
         var typed = (JsonHttpResult<ErrorResponse>)result!;
         await Assert.That(typed.StatusCode).IsEqualTo(StatusCodes.Status502BadGateway);
         await Assert.That(typed.Value!.Error.Type).IsEqualTo("api_error");
-        await Assert.That(typed.Value.Error.Message).Contains("proxy's own API key");
+        await Assert.That(typed.Value.Error.Message).Contains("proxy's own credential");
+        await Assert.That(typed.Value.Error.Message).Contains("backend login or API key");
     }
 
     /// <summary>A transport failure reaching the upstream at all becomes a clean Anthropic error.</summary>

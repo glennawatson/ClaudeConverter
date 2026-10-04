@@ -3,8 +3,8 @@
 A model-provider compatibility layer, compiled ahead of time to a single native binary. Point a
 coding agent at it and the session runs on a different model provider underneath, transparently.
 
-NVIDIA NIM is the only upstream provider it speaks, and the transport is abstracted behind an
-interface so another one can be added without disturbing either client-facing side. It is a C#
+The proxy supports NVIDIA NIM, local Ollama, hosted compatible endpoints, and the Anthropic API.
+The hosted backend can use an API key or a ChatGPT subscription login. It is a C#
 rewrite of the ideas in [cc-nim](https://github.com/diyism/cc-nim) and
 [claude-nim](https://github.com/claude-server/claude-nim), both MIT licensed.
 
@@ -21,15 +21,13 @@ provider pointed at this proxy's own `/v1/messages`, and it just works — see
 
 ## Scope
 
-NVIDIA NIM only, today, on the upstream side. This is not a multi-provider router yet and does not
-pretend to be one — the abstraction exists so a second upstream provider is an addition rather than
-a rewrite. On the client-facing side, Anthropic Messages and OpenAI Responses are both served now;
-a third wire format is the same kind of addition.
+Model routes can choose an upstream provider. Fallback chains can include several providers.
+The client-facing routes serve Anthropic Messages and OpenAI Responses on the same port.
 
 ## Requirements
 
 - .NET 10 or 11 SDK
-- An NVIDIA API key (the free tier is enough)
+- Credentials for your chosen upstream provider
 
 ## Quick start
 
@@ -41,6 +39,75 @@ export NVIDIA_API_KEY="nvapi-..."
 ```
 
 Then point a client at it — see [Connecting a client](#connecting-a-client) below.
+
+## Using a GPT backend
+
+Choose one authentication mode for the hosted backend. `ChatGpt` uses your saved subscription
+profile. `ApiKey` uses a separately billed API key. The proxy does not switch between these modes
+when a request fails.
+
+### Subscription login
+
+Eligible accounts can grant subscription usage through the official browser sign-in flow.
+Model access depends on the selected account. See the
+[sign-in documentation](https://developers.openai.com/siwc/token-sharing-open-source/sign-in).
+
+1. Run the login command on the computer that runs the proxy.
+2. Open the printed URL in your browser. Complete login and grant subscription usage.
+3. Set the authentication mode and model routes. Start the proxy.
+
+```bash
+dotnet run --project src/ClaudeNim.Aot/ClaudeNim.Aot.csproj --framework net10.0 -- --chatgpt-login
+
+export OPENAI_ENABLED=true
+export OPENAI_AUTHENTICATION=ChatGpt
+export DEFAULT_MODEL="openai:<model-id>"
+export OPUS_MODEL="$DEFAULT_MODEL"
+export SONNET_MODEL="$DEFAULT_MODEL"
+export HAIKU_MODEL="$DEFAULT_MODEL"
+export FALLBACK_MODELS=""
+export OPUS_FALLBACK_MODELS=""
+export SONNET_FALLBACK_MODELS=""
+export HAIKU_FALLBACK_MODELS=""
+
+dotnet run --project src/ClaudeNim.Aot/ClaudeNim.Aot.csproj --framework net10.0
+```
+
+Replace `<model-id>` with a model available to your account. Use the account's
+[model catalog](https://developers.openai.com/siwc/token-sharing-open-source/models-and-inference)
+to check available model identifiers.
+
+The login command prints the credential file path. It saves tokens in the user's local application
+data folder under `claudenim/chatgpt.json`. Unix credential files have owner-only permissions.
+The proxy refreshes expired access tokens under a file lock. It saves refreshed credentials
+atomically. Keep this file private.
+
+Set `CHATGPT_CREDENTIALS_PATH` before login and startup to choose another profile file.
+Use a separate profile for each account or workspace. Returning login reuses that profile's
+issued client identifier. Disconnect the app in ChatGPT settings to revoke access.
+
+The browser callback listens on `127.0.0.1:1455`. Login times out after five minutes.
+Subscription requests use the public Responses endpoint. The proxy translates streamed text and
+function tool calls for either client-facing route. It collects the result when the caller asks for
+a non-streaming response. Subscription requests follow the
+[preview limits](https://developers.openai.com/siwc/token-sharing-open-source/preview-limitations).
+The subscription route omits sampling controls and output token limits that this flow does not accept.
+Unknown model profiles remain text-only under the proxy's existing model capability rules.
+
+### API key
+
+Use the same model routes with these settings:
+
+```bash
+export OPENAI_ENABLED=true
+export OPENAI_AUTHENTICATION=ApiKey
+export OPENAI_API_KEY="your-api-key"
+export OPENAI_BASE_URL="https://api.openai.com/v1"
+```
+
+The public API backend uses `max_completion_tokens`. It removes local model template fields.
+It omits sampling controls for reasoning model families. A custom `OPENAI_BASE_URL` keeps the
+compatible endpoint's `max_tokens` request format.
 
 ## Running it in the background
 

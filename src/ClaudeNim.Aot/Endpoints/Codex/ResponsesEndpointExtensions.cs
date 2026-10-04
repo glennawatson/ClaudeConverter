@@ -832,9 +832,8 @@ public static class ResponsesEndpointExtensions
     /// <returns>The message to report.</returns>
     private static string Describe(int upstreamStatus, string detail) =>
         upstreamStatus is StatusCodes.Status401Unauthorized or StatusCodes.Status403Forbidden
-            ? $"NVIDIA NIM rejected the proxy's own API key with status {upstreamStatus}. "
-                + "This is the gateway's credential, not the caller's, and re-authenticating will not "
-                + $"change it — the key the proxy was started with needs fixing. Upstream said: {detail}"
+            ? $"The upstream backend rejected the proxy's own credential with status {upstreamStatus}. "
+                + $"Check the backend login or API key. Upstream said: {detail}"
             : detail;
 
     /// <summary>Truncates a body so a log line stays a line rather than a dump of the whole payload.</summary>

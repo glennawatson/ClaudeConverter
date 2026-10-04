@@ -113,6 +113,8 @@ public static class EnvironmentConfigurationExtensions
         new("OPENAI_ENABLED", "OpenAi:Enabled"),
         new("OPENAI_BASE_URL", "OpenAi:BaseUrl"),
         new("OPENAI_API_KEY", "OpenAi:ApiKey"),
+        new("OPENAI_AUTHENTICATION", "OpenAi:Authentication"),
+        new("CHATGPT_CREDENTIALS_PATH", "OpenAi:CredentialsPath"),
         new("OPENAI_READ_TIMEOUT_SECONDS", "OpenAi:ReadSeconds"),
         new("OPENAI_COMPLETION_TIMEOUT_SECONDS", "OpenAi:CompletionSeconds"),
 

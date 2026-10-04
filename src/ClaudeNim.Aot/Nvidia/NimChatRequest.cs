@@ -30,11 +30,13 @@ namespace ClaudeNim.Aot.Nvidia;
 /// <param name="ReasoningEffort">How hard the model should reason; <c>low</c>, <c>medium</c> or <c>high</c>.</param>
 /// <param name="ResponseFormat">The shape the answer must take, for structured outputs.</param>
 /// <param name="Extensions">NVIDIA's own extensions to the request body.</param>
+/// <param name="MaxCompletionTokens">The public API completion limit.</param>
 [System.Diagnostics.DebuggerDisplay("NimChatRequest: {ToString(),nq}")]
 public sealed record NimChatRequest(
     [property: JsonPropertyName("model")] string Model,
     [property: JsonPropertyName("messages")] List<NimChatMessage> Messages,
-    [property: JsonPropertyName("max_tokens")] int MaxTokens,
+    [property: JsonPropertyName("max_tokens")]
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)] int MaxTokens,
     [property: JsonPropertyName("stream")] bool Stream,
     [property: JsonPropertyName("stream_options")] NimStreamOptions? StreamOptions = null,
     [property: JsonPropertyName("temperature")] double? Temperature = null,
@@ -54,4 +56,5 @@ public sealed record NimChatRequest(
     [property: JsonPropertyName("chat_template_kwargs")] NimChatTemplateKwargs? ChatTemplateKwargs = null,
     [property: JsonPropertyName("reasoning_effort")] string? ReasoningEffort = null,
     [property: JsonPropertyName("response_format")] JsonElement? ResponseFormat = null,
-    [property: JsonPropertyName("nvext")] NimExtensions? Extensions = null);
+    [property: JsonPropertyName("nvext")] NimExtensions? Extensions = null,
+    [property: JsonPropertyName("max_completion_tokens")] int? MaxCompletionTokens = null);

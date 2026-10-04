@@ -9,6 +9,8 @@ namespace ClaudeNim.Aot.Configuration;
 /// <param name="ApiKey">The bearer credential to send, or empty to send no <c>Authorization</c> header at all.</param>
 /// <param name="ReadSeconds">How long a streamed call may wait for its headers.</param>
 /// <param name="CompletionSeconds">How long a non-streamed call may take from start to finish.</param>
+/// <param name="Authentication">The credential mode: ApiKey or ChatGpt.</param>
+/// <param name="CredentialsPath">The local subscription profile path, or empty for the user default.</param>
 /// <remarks>
 /// Left disabled and unconfigured, a model naming this provider simply never answers, which is the
 /// state every deployment starts in until it opts in with a real endpoint and key. See
@@ -17,10 +19,12 @@ namespace ClaudeNim.Aot.Configuration;
 [System.Diagnostics.DebuggerDisplay("OpenAiCompatibleOptions: {BaseUrl}")]
 public sealed record OpenAiCompatibleOptions(
     bool Enabled = false,
-    string BaseUrl = "",
+    string BaseUrl = "https://api.openai.com/v1",
     string ApiKey = "",
     int ReadSeconds = 60,
-    int CompletionSeconds = 600)
+    int CompletionSeconds = 600,
+    string Authentication = "ApiKey",
+    string CredentialsPath = "")
 {
     /// <summary>The configuration section these options are bound from.</summary>
     internal const string SectionName = "OpenAi";

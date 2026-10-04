@@ -4,6 +4,7 @@
 using System.Diagnostics.CodeAnalysis;
 using ClaudeNim.Aot.Configuration;
 using ClaudeNim.Aot.Hosting;
+using ClaudeNim.Aot.Nvidia;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
@@ -39,11 +40,23 @@ public static class Program
     /// <returns>A task that completes once the host shuts down.</returns>
     public static async Task Main(string[] args)
     {
-        var builder = WebApplication.CreateSlimBuilder(args);
+        var login = args.Length > 0 && args[0] == "--chatgpt-login";
+        var builder = WebApplication.CreateSlimBuilder(login ? args[1..] : args);
 
         // Environment variables win over the settings file: the proxy is usually run from a shell
         // or a container, where a credential in a file on disk is the thing you least want.
         _ = builder.Configuration.AddClaudeNimEnvironment();
+
+        if (login)
+        {
+            using var handler = new SocketsHttpHandler { AllowAutoRedirect = false };
+            using var http = new HttpClient(handler);
+            const int loginMinutes = 5;
+            using var timeout = new CancellationTokenSource(TimeSpan.FromMinutes(loginMinutes));
+            var profile = ChatGptCredentials.PathFor(builder.Configuration["OpenAi:CredentialsPath"] ?? string.Empty);
+            await ChatGptLogin.SignInAsync(http, profile, Console.Out, timeout.Token).ConfigureAwait(false);
+            return;
+        }
 
         // Scopes are on so every line of a turn names the turn it belongs to. The tracing
         // identifiers the logger would otherwise prepend to each of those lines describe a

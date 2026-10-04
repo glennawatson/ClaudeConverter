@@ -81,7 +81,9 @@ public static class ProxyServiceExtensions
             // IOpenAiCompatibleClient directly: a container resolves one instance per interface
             // type, and MessageServices/CodexServices need both by name, not whichever won last.
             _ = services.AddSingleton(sp => new OllamaClient(sp.GetRequiredService<IOllamaApi>(), ollama));
-            _ = services.AddSingleton(sp => new OpenAiClient(sp.GetRequiredService<IOpenAiApi>(), openAi));
+            _ = services.AddHttpClient("Subscription", static client => client.Timeout = Timeout.InfiniteTimeSpan)
+                .ConfigurePrimaryHttpMessageHandler(static () => new SocketsHttpHandler { AllowAutoRedirect = false, PooledConnectionLifetime = ConnectionLifetime });
+            _ = services.AddSingleton(sp => new OpenAiClient(sp.GetRequiredService<IOpenAiApi>(), openAi, sp.GetRequiredService<IHttpClientFactory>().CreateClient("Subscription")));
             _ = services.AddSingleton(sp => new AnthropicClient(sp.GetRequiredService<IAnthropicApi>(), anthropic));
 
             // Each protocol registers its own IRequestOptimizer (or none, if it has no housekeeping
