@@ -22,10 +22,11 @@ namespace ClaudeNim.Aot.Endpoints.Anthropic;
 /// <param name="ModelHealth">Tracks which models are cooling down, so a fallback chain can skip them.</param>
 /// <param name="Timeouts">The configured upstream timeouts.</param>
 /// <param name="OllamaClient">The transport a model addressed with the <c>ollama:</c> prefix resolves to.</param>
-/// <param name="OpenAiClient">The transport a model addressed with the <c>openai:</c>/<c>azure:</c> prefix resolves to.</param>
+/// <param name="OpenAiClient">The hosted transport, also used for legacy Azure configuration.</param>
 /// <param name="AnthropicClient">The transport a model addressed with the <c>claude:</c>/<c>anthropic:</c> prefix resolves to.</param>
 /// <param name="Time">The clock a re-issued streamed turn's backoff is measured against.</param>
 /// <param name="Logger">The diagnostic log.</param>
+/// <param name="AzureClient">The independent Azure transport, or null to use the legacy OpenAi configuration.</param>
 /// <remarks>
 /// The handler takes this one parameter rather than ten. A minimal API endpoint's signature is
 /// its dependency list, and ten of them makes the shape of the turn harder to read than the code
@@ -47,4 +48,5 @@ public sealed record MessageServices(
     IOpenAiCompatibleClient OpenAiClient,
     IAnthropicClient AnthropicClient,
     TimeProvider Time,
-    ILogger<MessageServices> Logger);
+    ILogger<MessageServices> Logger,
+    IOpenAiCompatibleClient? AzureClient = null);

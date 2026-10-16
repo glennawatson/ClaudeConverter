@@ -12,9 +12,12 @@ public enum UpstreamProvider
     /// <summary>A local Ollama server.</summary>
     Ollama = 1,
 
-    /// <summary>An OpenAI-compatible endpoint — literal OpenAI, or Azure AI Foundry's Models endpoint.</summary>
+    /// <summary>A hosted OpenAI-compatible endpoint or subscription backend.</summary>
     OpenAi = 2,
 
     /// <summary>Real Anthropic, reached close to verbatim through the Anthropic route only.</summary>
     Anthropic = 3,
+
+    /// <summary>An independently configured Azure Foundry v1 endpoint.</summary>
+    Azure = 4,
 }

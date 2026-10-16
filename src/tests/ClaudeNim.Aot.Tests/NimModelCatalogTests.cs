@@ -3,6 +3,7 @@
 // See the LICENSE file in the project root for full license information.
 using ClaudeNim.Aot.Configuration;
 using ClaudeNim.Aot.Nvidia;
+using ClaudeNim.Aot.Routing;
 using ClaudeNim.Aot.Tests.Fakes;
 using Microsoft.Extensions.Logging.Abstractions;
 
@@ -221,6 +222,161 @@ public sealed class NimModelCatalogTests
         var models = await catalog.GetModelsAsync(CancellationToken.None);
 
         await Assert.That(models.Exists(static m => m.Id == "claude-opus-5")).IsFalse();
+    }
+
+    /// <summary>Configured provider models remain selectable without NVIDIA or Claude aliases.</summary>
+    /// <param name="cancellationToken">The token that cancels the test.</param>
+    /// <returns>A task representing the asynchronous test.</returns>
+    [Test]
+    public async Task GetModelsAsync_ConfiguredProviderRoutes_AdvertisesEveryPrimaryAndFallback(CancellationToken cancellationToken)
+    {
+        var client = new FakeNimClient { OnListModels = static () => null };
+        using var catalog = new NimModelCatalog(
+            client,
+            new ModelCatalogOptions(AdvertiseClaudeAliases: false),
+            new ModelRoutingOptions(
+                Default: "azure:default-deployment",
+                Opus: "openai:opus-deployment",
+                Sonnet: "ollama:sonnet:30b",
+                Haiku: "claude:haiku-deployment",
+                DefaultFallbacks: "azure:default-backup, openai:default-second-backup",
+                OpusFallbacks: " openai:opus-backup ",
+                SonnetFallbacks: "ollama:sonnet-backup:30b",
+                HaikuFallbacks: "anthropic:haiku-backup"),
+            NullLogger<NimModelCatalog>.Instance,
+            TimeProvider.System);
+        string[] configuredModels =
+        [
+            "azure:default-deployment",
+            "openai:opus-deployment",
+            "ollama:sonnet:30b",
+            "claude:haiku-deployment",
+            "azure:default-backup",
+            "openai:default-second-backup",
+            "openai:opus-backup",
+            "ollama:sonnet-backup:30b",
+            "anthropic:haiku-backup",
+        ];
+
+        var models = await catalog.GetModelsAsync(cancellationToken);
+
+        foreach (var configuredModel in configuredModels)
+        {
+            var gatewayId = GatewayModelId.Encode(configuredModel);
+            await Assert.That(models.Exists(model => model.Id == gatewayId)).IsTrue();
+            var noThinkingId = GatewayModelId.EncodeWithoutThinking(configuredModel);
+            await Assert.That(models.Exists(model => model.Id == noThinkingId)).IsTrue();
+        }
+    }
+
+    /// <summary>Several routes to the same provider model produce one pair of picker entries.</summary>
+    /// <param name="cancellationToken">The token that cancels the test.</param>
+    /// <returns>A task representing the asynchronous test.</returns>
+    [Test]
+    public async Task GetModelsAsync_RepeatedProviderModel_AdvertisesOnePairOfVariants(CancellationToken cancellationToken)
+    {
+        const string ConfiguredModel = "azure:shared-deployment";
+        var client = new FakeNimClient { OnListModels = static () => new([new(UpstreamModel)]) };
+        using var catalog = new NimModelCatalog(
+            client,
+            new ModelCatalogOptions(AdvertiseClaudeAliases: false),
+            new ModelRoutingOptions(
+                Default: ConfiguredModel,
+                Opus: ConfiguredModel,
+                Sonnet: ConfiguredModel,
+                Haiku: ConfiguredModel,
+                DefaultFallbacks: "azure:shared-deployment, , azure:shared-deployment",
+                OpusFallbacks: ConfiguredModel,
+                SonnetFallbacks: ConfiguredModel,
+                HaikuFallbacks: ConfiguredModel),
+            NullLogger<NimModelCatalog>.Instance,
+            TimeProvider.System);
+
+        var models = await catalog.GetModelsAsync(cancellationToken);
+        var matching = models.FindAll(static model => model.Id.EndsWith(ConfiguredModel, StringComparison.Ordinal));
+
+        await Assert.That(matching.Count).IsEqualTo(ReasoningModelVariants);
+    }
+
+    /// <summary>Configured NIM names are not selectable unless the NVIDIA listing supplies them.</summary>
+    /// <param name="cancellationToken">The token that cancels the test.</param>
+    /// <returns>A task representing the asynchronous test.</returns>
+    [Test]
+    public async Task GetModelsAsync_UnlistedNimRoutes_DoesNotAdvertiseConfiguredNames(CancellationToken cancellationToken)
+    {
+        const string UnlistedModel = "vendor/not-listed";
+        var client = new FakeNimClient { OnListModels = static () => new([new(UpstreamModel)]) };
+        using var catalog = new NimModelCatalog(
+            client,
+            new ModelCatalogOptions(AdvertiseClaudeAliases: false),
+            new ModelRoutingOptions(
+                Default: UnlistedModel,
+                OpusFallbacks: "vendor/not-listed, unknown:deployment, azure: , , "),
+            NullLogger<NimModelCatalog>.Instance,
+            TimeProvider.System);
+
+        var models = await catalog.GetModelsAsync(cancellationToken);
+
+        await Assert.That(models.Count).IsEqualTo(ReasoningModelVariants);
+        await Assert.That(models.Exists(static model => model.Id.Contains(UnlistedModel, StringComparison.Ordinal))).IsFalse();
+    }
+
+    /// <summary>Explicit provider deployments stay selectable when NVIDIA cannot be reached.</summary>
+    /// <param name="cancellationToken">The token that cancels the test.</param>
+    /// <returns>A task representing the asynchronous test.</returns>
+    [Test]
+    public async Task GetModelsAsync_AdditionalProviderModels_AdvertisesDistinctQualifiedDeployments(CancellationToken cancellationToken)
+    {
+        const string ConfiguredModel = "azure:extra-deployment";
+        var client = new FakeNimClient { OnListModels = static () => throw new HttpRequestException("Unavailable") };
+        using var catalog = new NimModelCatalog(
+            client,
+            new ModelCatalogOptions(
+                AdvertiseClaudeAliases: false,
+                AdditionalModels: " azure:extra-deployment, , openai:extra-backup, azure:extra-deployment, vendor/unlisted, azure: "),
+            new ModelRoutingOptions(Default: ConfiguredModel),
+            NullLogger<NimModelCatalog>.Instance,
+            TimeProvider.System);
+
+        var models = await catalog.GetModelsAsync(cancellationToken);
+        var matching = models.FindAll(static model => model.Id.EndsWith(ConfiguredModel, StringComparison.Ordinal));
+        var extra = await catalog.FindModelAsync(GatewayModelId.Encode("openai:extra-backup"), cancellationToken);
+
+        await Assert.That(matching.Count).IsEqualTo(ReasoningModelVariants);
+        await Assert.That(extra).IsNotNull();
+        await Assert.That(models.Exists(static model => model.Id.Contains("vendor/unlisted", StringComparison.Ordinal))).IsFalse();
+        await Assert.That(GatewayModelId.TryDecode(matching[0].Id, out var decoded, out var thinking)).IsTrue();
+        await Assert.That(decoded).IsEqualTo(ConfiguredModel);
+        await Assert.That(thinking).IsTrue();
+    }
+
+    /// <summary>Provider deployments use configured limits rather than NVIDIA model profile sizes.</summary>
+    /// <param name="cancellationToken">The token that cancels the test.</param>
+    /// <returns>A task representing the asynchronous test.</returns>
+    [Test]
+    public async Task GetModelsAsync_AdditionalProviderModel_UsesConfiguredCapabilitiesAndLimits(CancellationToken cancellationToken)
+    {
+        const string ConfiguredModel = "azure:nvidia/nemotron-3-nano-omni-30b-a3b-reasoning";
+        const int ContextWindow = 16_384;
+        const int OutputTokens = 2_048;
+        var client = new FakeNimClient { OnListModels = static () => new([new(UpstreamModel)]) };
+        using var catalog = new NimModelCatalog(
+            client,
+            new ModelCatalogOptions(
+                DefaultContextWindow: ContextWindow,
+                DefaultMaxOutputTokens: OutputTokens,
+                AdvertiseClaudeAliases: false,
+                AdditionalModels: ConfiguredModel),
+            new ModelRoutingOptions(),
+            NullLogger<NimModelCatalog>.Instance,
+            TimeProvider.System);
+
+        var found = await catalog.FindModelAsync(GatewayModelId.Encode(ConfiguredModel), cancellationToken);
+        var model = await Assert.That(found).IsNotNull();
+
+        await Assert.That(model.MaxInputTokens).IsEqualTo(ContextWindow);
+        await Assert.That(model.MaxTokens).IsEqualTo(OutputTokens);
+        await Assert.That(model.Capabilities.ImageInput.Supported).IsFalse();
     }
 
     /// <summary>Concurrent callers share one refresh rather than issuing one each.</summary>

@@ -12,12 +12,14 @@ namespace ClaudeNim.Aot.Configuration;
 /// Claude Code sends by default, so listing them keeps the native model picker consistent with
 /// what the proxy will actually route.
 /// </param>
+/// <param name="AdditionalModels">Comma-separated provider-qualified chat deployments to include in the model picker.</param>
 [System.Diagnostics.DebuggerDisplay("ModelCatalogOptions: {ToString(),nq}")]
 public sealed record ModelCatalogOptions(
     int CacheMinutes = 30,
     int DefaultContextWindow = 131_072,
     int DefaultMaxOutputTokens = ModelCatalogOptions.DefaultOutputTokens,
-    bool AdvertiseClaudeAliases = true)
+    bool AdvertiseClaudeAliases = true,
+    string AdditionalModels = "")
 {
     /// <summary>The output ceiling assumed for a model NVIDIA does not size.</summary>
     /// <remarks>

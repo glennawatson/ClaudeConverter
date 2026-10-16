@@ -3,7 +3,7 @@
 A model-provider compatibility layer, compiled ahead of time to a single native binary. Point a
 coding agent at it and the session runs on a different model provider underneath, transparently.
 
-The proxy supports NVIDIA NIM, local Ollama, hosted compatible endpoints, and the Anthropic API.
+The proxy supports Azure Foundry, NVIDIA NIM, local Ollama, hosted compatible endpoints, and the Anthropic API.
 The hosted backend can use an API key or a ChatGPT subscription login. It is a C#
 rewrite of the ideas in [cc-nim](https://github.com/diyism/cc-nim) and
 [claude-nim](https://github.com/claude-server/claude-nim), both MIT licensed.
@@ -26,19 +26,93 @@ The client-facing routes serve Anthropic Messages and OpenAI Responses on the sa
 
 ## Requirements
 
-- .NET 10 or 11 SDK
+- .NET 11 SDK
 - Credentials for your chosen upstream provider
 
 ## Quick start
 
 ```bash
-dotnet publish src/ClaudeNim.Aot/ClaudeNim.Aot.csproj -c Release -r linux-x64
+dotnet publish src/ClaudeNim.Aot/ClaudeNim.Aot.csproj -c Release -f net11.0 -r linux-x64
 
 export NVIDIA_API_KEY="nvapi-..."
-./src/ClaudeNim.Aot/bin/Release/net10.0/linux-x64/publish/ClaudeNim.Aot
+./src/ClaudeNim.Aot/bin/Release/net11.0/linux-x64/publish/ClaudeNim.Aot
 ```
 
 Then point a client at it — see [Connecting a client](#connecting-a-client) below.
+
+## Using Azure Foundry with NVIDIA backup
+
+Sign in with the installed Azure CLI, then configure the proxy from your deployed models:
+
+```bash
+az login
+dotnet run --project src/ClaudeNim.Aot/ClaudeNim.Aot.csproj --framework net11.0 -- --azure-configure
+
+export NVIDIA_API_KEY="nvapi-..."
+dotnet run --project src/ClaudeNim.Aot/ClaudeNim.Aot.csproj --framework net11.0
+```
+
+When the current subscription has more than one eligible resource, name the resource group and
+account:
+
+```bash
+dotnet run --project src/ClaudeNim.Aot/ClaudeNim.Aot.csproj --framework net11.0 -- --azure-configure <resource-group> <account>
+```
+
+Setup reads the resource endpoint, deployed chat models and API key through `az`. It does not
+create or change Azure resources. It saves a private profile under the user's local application
+data folder at `claudenim/azure.json`. Unix profile files have owner-only permissions. The profile
+contains an API key, so do not commit or share it. Set `AZURE_PROFILE_PATH` to use another file.
+Startup loads the profile before environment overrides. Rerun setup after changing deployments.
+The Azure `/models` endpoint is not used for discovery because it also lists undeployed models.
+
+Setup chooses Azure primary models for the default, Opus, Sonnet and Haiku routes. Each route
+falls back to NVIDIA Nemotron Super and DeepSeek Flash. Keep `NVIDIA_API_KEY` configured for
+those backups. Azure and OpenAI have separate credentials, so a subscription login can coexist
+with Azure routes.
+
+Fallback covers quota and rate-limit errors, unavailable upstreams, connection timeouts and
+rejected upstream credentials. A recognized context-length error can try another model without
+discarding conversation history. A backup with a smaller context may also reject that request.
+Ordinary malformed requests do not trigger fallback. A stream is not restarted after visible
+output has been sent.
+
+Setup enables fallback for exact model-picker selections through
+`ModelRouting:FallbackForExplicitModels`. Those selections use the default fallback chain.
+Set `FALLBACK_FOR_EXPLICIT_MODELS=false` to keep an exact model even when it fails.
+Without this opt-in, exact selections do not substitute another model. Configured Azure models
+appear in the picker alongside NVIDIA models.
+
+### Manual configuration
+
+You can configure Azure without installing `az` on the proxy's runtime host:
+
+```bash
+export AZURE_ENABLED=true
+export AZURE_BASE_URL="https://<account>.cognitiveservices.azure.com"
+export AZURE_API_KEY="your-resource-key"
+export DEFAULT_MODEL="azure:<deployment-name>"
+export OPUS_MODEL="$DEFAULT_MODEL"
+export SONNET_MODEL="$DEFAULT_MODEL"
+export HAIKU_MODEL="$DEFAULT_MODEL"
+export FALLBACK_MODELS="nvidia/nemotron-3-super-120b-a12b,deepseek-ai/deepseek-v4.1-flash"
+export OPUS_FALLBACK_MODELS="$FALLBACK_MODELS"
+export SONNET_FALLBACK_MODELS="$FALLBACK_MODELS"
+export HAIKU_FALLBACK_MODELS="$FALLBACK_MODELS"
+export FALLBACK_FOR_EXPLICIT_MODELS=true
+export ADDITIONAL_MODELS="azure:<another-chat-deployment>"
+export NVIDIA_API_KEY="nvapi-..."
+```
+
+`AZURE_BASE_URL` accepts a resource-root URL or one ending in `/openai/v1`. The wire model is
+the deployment name. GPT models use `max_completion_tokens`; other publishers keep `max_tokens`.
+The proxy removes NVIDIA-only template fields and unsupported GPT reasoning-model sampling
+controls. GPT-6 tool requests use Azure Responses to preserve reasoning and tool support.
+For a GPT deployment with a custom name, set
+`AzureFoundry__ModelNames__<deployment-name>=<underlying-model-name>` so the correct controls apply.
+Azure header and completion timeouts use `AZURE_READ_TIMEOUT_SECONDS` and
+`AZURE_COMPLETION_TIMEOUT_SECONDS`. Model sizing and image capabilities remain conservative
+defaults where the proxy has no verified profile.
 
 ## Using a GPT backend
 
@@ -57,7 +131,7 @@ Model access depends on the selected account. See the
 3. Set the authentication mode and model routes. Start the proxy.
 
 ```bash
-dotnet run --project src/ClaudeNim.Aot/ClaudeNim.Aot.csproj --framework net10.0 -- --chatgpt-login
+dotnet run --project src/ClaudeNim.Aot/ClaudeNim.Aot.csproj --framework net11.0 -- --chatgpt-login
 
 export OPENAI_ENABLED=true
 export OPENAI_AUTHENTICATION=ChatGpt
@@ -70,7 +144,7 @@ export OPUS_FALLBACK_MODELS=""
 export SONNET_FALLBACK_MODELS=""
 export HAIKU_FALLBACK_MODELS=""
 
-dotnet run --project src/ClaudeNim.Aot/ClaudeNim.Aot.csproj --framework net10.0
+dotnet run --project src/ClaudeNim.Aot/ClaudeNim.Aot.csproj --framework net11.0
 ```
 
 Replace `<model-id>` with a model available to your account. Use the account's
@@ -126,7 +200,7 @@ A user service runs as your own account, starts at login, and needs no root:
 ```bash
 mkdir -p ~/.config/systemd/user
 mkdir -p ~/.local/opt/claudenim
-cp -r src/ClaudeNim.Aot/bin/Release/net10.0/linux-x64/publish/* ~/.local/opt/claudenim/
+cp -r src/ClaudeNim.Aot/bin/Release/net11.0/linux-x64/publish/* ~/.local/opt/claudenim/
 
 cat > ~/.config/systemd/user/claudenim.service <<'EOF'
 [Unit]
@@ -164,7 +238,7 @@ A `LaunchAgent` is the macOS equivalent: it runs as your user and starts at logi
 
 ```bash
 mkdir -p ~/Library/Application\ Support/claudenim
-cp -r src/ClaudeNim.Aot/bin/Release/net10.0/osx-arm64/publish/* ~/Library/Application\ Support/claudenim/
+cp -r src/ClaudeNim.Aot/bin/Release/net11.0/osx-arm64/publish/* ~/Library/Application\ Support/claudenim/
 
 cat > ~/Library/LaunchAgents/com.claudenim.proxy.plist <<'EOF'
 <?xml version="1.0" encoding="UTF-8"?>
@@ -306,7 +380,8 @@ export CLAUDENIM_ModelRouting__EnableThinking=false
 | `Retries` | Retry attempts and exponential-backoff delay for transient upstream failures |
 | `ModelHealth` | How many failures put a model in cooldown, and how long the cooldown lasts |
 | `Ollama` | A local Ollama server a `ollama:`-prefixed model resolves to |
-| `OpenAi` | A hosted OpenAI-compatible endpoint (literal OpenAI, or Azure AI Foundry) a `openai:`/`azure:`-prefixed model resolves to |
+| `OpenAi` | A hosted OpenAI-compatible endpoint or subscription backend addressed by `openai:` |
+| `AzureFoundry` | An independent Azure v1 endpoint addressed by `azure:` |
 | `AnthropicApi` | Real Anthropic a `claude:`/`anthropic:`-prefixed model resolves to |
 | `Optimizations` | The local fast paths for Claude Code's housekeeping requests |
 
@@ -460,10 +535,10 @@ answer in about 3.5 seconds where `nemotron-3.5-lightning` takes 61 — it is a 
 it reasons over the whole prompt before saying anything. A chain that lands on it serves the turn
 correctly and still loses, because Claude Code gave up two minutes ago.
 
-What the chain does not cover is a rejected request: a `400` is a property of the body, not of the
-model's availability, and the next model would refuse it for the same reason. Nor does a model
-named by its gateway identifier get a chain — the client picked that model from the listing this
-proxy advertised, and answering as a different one is not a substitution it asked for. Every
+Ordinary malformed requests do not use the chain. Recognized context-length errors can try
+another model, while credential and quota failures can use another provider. A model named by
+its gateway identifier gets no chain unless `ModelRouting:FallbackForExplicitModels` is enabled.
+That opt-in uses the default fallback chain for exact model selections. Every
 substitution is logged at warning naming both models, because the tier the client asked for is now
 being served by something else, usually weaker.
 
@@ -472,9 +547,9 @@ being served by something else, usually weaker.
 Every place a model is named in configuration — a tier's own primary model, or an entry in its
 fallback chain — accepts a provider prefix: `ollama:qwen3-coder:30b` or `openai:gpt-5-mini` name a
 model served by something other than NIM, while a bare identifier such as
-`nvidia/nemotron-3-super-120b-a12b` stays NIM exactly as before. `azure:` is accepted as an alias
-for `openai:`, since Azure AI Foundry's own Models endpoint speaks the identical OpenAI-compatible
-shape. The prefix is proxy-internal addressing and never reaches the wire — only the bare model
+`nvidia/nemotron-3-super-120b-a12b` stays NIM. `azure:` selects the independent `AzureFoundry`
+endpoint when enabled. If that section is disabled, it uses the legacy `OpenAi` settings for
+compatibility. The prefix is proxy-internal addressing and never reaches the wire. Only the bare model
 name after it does.
 
 A model naming `Ollama` or `OpenAi` is disabled until that section's own `Enabled` is turned on —

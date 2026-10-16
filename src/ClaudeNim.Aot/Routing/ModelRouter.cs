@@ -9,9 +9,9 @@ namespace ClaudeNim.Aot.Routing;
 /// <param name="Options">The configured tier mapping.</param>
 /// <remarks>
 /// A client may address a model three ways: by a gateway identifier this proxy advertised, by a
-/// Claude tier name such as <c>claude-opus-5</c>, or by anything else. The first wins outright
-/// because the client is naming a model it was offered; the second consults the tier overrides;
-/// the third falls back to the configured default.
+/// Claude tier name such as <c>claude-opus-5</c>, or by anything else. The first preserves the
+/// selected model, with default backups only when enabled; the second consults tier overrides;
+/// the third uses the configured default.
 /// </remarks>
 [System.Diagnostics.DebuggerDisplay("ModelRouter: {ToString(),nq}")]
 public sealed record ModelRouter(ModelRoutingOptions Options) : IModelRouter
@@ -21,11 +21,13 @@ public sealed record ModelRouter(ModelRoutingOptions Options) : IModelRouter
     {
         var model = requestedModel ?? string.Empty;
 
-        // A gateway identifier names one model outright. Substituting another would answer as a
-        // model the client did not ask for, having asked for one by name — so it gets no chain.
+        // Model-picker selections stay exact unless the operator permits a default backup chain.
         if (GatewayModelId.TryDecode(model, out var gatewayModel, out var gatewayThinking))
         {
-            return new(model, gatewayModel, ModelTier.Default, gatewayThinking);
+            var alternatives = Options.FallbackForExplicitModels
+                ? ResolveFallbacks(ModelTier.Default, gatewayModel)
+                : [];
+            return new(model, gatewayModel, ModelTier.Default, gatewayThinking, alternatives);
         }
 
         var tier = Classify(model);

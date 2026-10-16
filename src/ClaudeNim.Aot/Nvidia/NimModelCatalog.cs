@@ -9,7 +9,7 @@ using Microsoft.Extensions.Logging;
 
 namespace ClaudeNim.Aot.Nvidia;
 
-/// <summary>Builds the advertised model listing from the live NVIDIA NIM catalogue.</summary>
+/// <summary>Builds the advertised model listing from NVIDIA NIM and configured provider deployments.</summary>
 /// <remarks>
 /// <para>
 /// This is what lets a Claude client discover what it can actually run. The listing is built
@@ -47,7 +47,7 @@ public sealed class NimModelCatalog : INimModelCatalog, IDisposable
     /// <summary>The catalogue settings.</summary>
     private readonly ModelCatalogOptions _options;
 
-    /// <summary>The configured tier mapping, used for the Claude aliases.</summary>
+    /// <summary>The configured primary and fallback models, also used for Claude aliases.</summary>
     private readonly ModelRoutingOptions _routing;
 
     /// <summary>The diagnostic log.</summary>
@@ -68,7 +68,7 @@ public sealed class NimModelCatalog : INimModelCatalog, IDisposable
     /// <summary>Initializes a new instance of the <see cref="NimModelCatalog"/> class.</summary>
     /// <param name="client">The NIM client used to fetch the catalogue.</param>
     /// <param name="options">The catalogue settings.</param>
-    /// <param name="routing">The configured tier mapping, used for the Claude aliases.</param>
+    /// <param name="routing">The configured primary and fallback models.</param>
     /// <param name="logger">The diagnostic log.</param>
     /// <param name="timeProvider">The clock the cache expiry is measured against.</param>
     public NimModelCatalog(
@@ -175,12 +175,49 @@ public sealed class NimModelCatalog : INimModelCatalog, IDisposable
             AddVariants(models, upstream[i].Id, upstream[i].Published);
         }
 
+        AddConfiguredVariants(models, cancellationToken);
+
         if (_options.AdvertiseClaudeAliases)
         {
             AddClaudeAliases(models);
         }
 
         return new(models, fromUpstream);
+    }
+
+    /// <summary>Adds distinct configured provider deployments without advertising unlisted NIM models.</summary>
+    /// <param name="models">The models list to populate.</param>
+    /// <param name="cancellationToken">The token that cancels the operation.</param>
+    private void AddConfiguredVariants(List<ModelDescriptor> models, CancellationToken cancellationToken)
+    {
+        string[] configuredLists =
+        [
+            _options.AdditionalModels,
+            _routing.Default,
+            _routing.Opus,
+            _routing.Sonnet,
+            _routing.Haiku,
+            _routing.DefaultFallbacks,
+            _routing.OpusFallbacks,
+            _routing.SonnetFallbacks,
+            _routing.HaikuFallbacks,
+        ];
+        HashSet<string> advertised = [with(StringComparer.OrdinalIgnoreCase)];
+
+        foreach (var configuredList in configuredLists)
+        {
+            foreach (var candidate in configuredList.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                var target = UpstreamModelId.Parse(candidate);
+                if (target.Provider == UpstreamProvider.Nim || string.IsNullOrWhiteSpace(target.Model) || !advertised.Add(candidate))
+                {
+                    continue;
+                }
+
+                AddVariants(models, candidate, PublishedFallback);
+            }
+        }
     }
 
     /// <summary>Fetches the model identifiers and published dates from NVIDIA's catalogue.</summary>

@@ -16,6 +16,7 @@ namespace ClaudeNim.Aot.Configuration;
 /// <param name="OpusFallbacks">The models to try, in order, when the Opus tier's own is unavailable.</param>
 /// <param name="SonnetFallbacks">The models to try, in order, when the Sonnet tier's own is unavailable.</param>
 /// <param name="HaikuFallbacks">The models to try, in order, when the Haiku tier's own is unavailable.</param>
+/// <param name="FallbackForExplicitModels">Whether model-picker selections may use the configured default fallback chain.</param>
 /// <remarks>
 /// <para>
 /// <see cref="EnableSonnetThinking"/> defaults to off, unlike the other tiers. Claude Code's Auto
@@ -47,7 +48,8 @@ public sealed record ModelRoutingOptions(
     string DefaultFallbacks = "",
     string OpusFallbacks = "",
     string SonnetFallbacks = "",
-    string HaikuFallbacks = "")
+    string HaikuFallbacks = "",
+    bool FallbackForExplicitModels = false)
 {
     /// <summary>The configuration section these options are bound from.</summary>
     internal const string SectionName = "ModelRouting";

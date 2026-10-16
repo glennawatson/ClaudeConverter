@@ -5,7 +5,7 @@ using System.Text.Json;
 
 namespace ClaudeNim.Aot.Nvidia;
 
-/// <summary>Builds a subscription request from the shared conversation.</summary>
+/// <summary>Builds Responses API requests from the shared conversation.</summary>
 internal static class ChatGptRequestBuilder
 {
     /// <summary>The function tool discriminator.</summary>
@@ -13,9 +13,12 @@ internal static class ChatGptRequestBuilder
 
     /// <summary>Creates the request body.</summary>
     /// <param name="request">The shared conversation.</param>
-    /// <returns>The subscription request.</returns>
-    internal static JsonElement Build(NimChatRequest request)
+    /// <param name="subscription">Whether subscription-only tool grouping and token-limit rules apply.</param>
+    /// <param name="cancellationToken">Stops conversation encoding.</param>
+    /// <returns>The Responses API request.</returns>
+    internal static JsonElement Build(NimChatRequest request, bool subscription = true, CancellationToken cancellationToken = default)
     {
+        cancellationToken.ThrowIfCancellationRequested();
         using var buffer = new MemoryStream();
         using (var writer = new Utf8JsonWriter(buffer))
         {
@@ -23,9 +26,15 @@ internal static class ChatGptRequestBuilder
             writer.WriteString("model", request.Model);
             writer.WriteBoolean("stream", true);
             writer.WriteBoolean("store", false);
+            if (!subscription)
+            {
+                writer.WriteNumber("max_output_tokens", request.MaxCompletionTokens ?? request.MaxTokens);
+            }
+
             writer.WriteStartArray("input");
             foreach (var message in request.Messages)
             {
+                cancellationToken.ThrowIfCancellationRequested();
                 WriteMessage(writer, message);
             }
 
@@ -37,8 +46,8 @@ internal static class ChatGptRequestBuilder
                 writer.WriteEndObject();
             }
 
-            WriteTools(writer, request.Tools);
-            WriteToolChoice(writer, request.ToolChoice);
+            WriteTools(writer, request.Tools, subscription);
+            WriteToolChoice(writer, request.ToolChoice, subscription);
             if (request.ParallelToolCalls is { } parallel)
             {
                 writer.WriteBoolean("parallel_tool_calls", parallel);
@@ -63,6 +72,7 @@ internal static class ChatGptRequestBuilder
             writer.WriteEndObject();
         }
 
+        cancellationToken.ThrowIfCancellationRequested();
         using var document = JsonDocument.Parse(buffer.GetBuffer().AsMemory(0, checked((int)buffer.Length)));
         return document.RootElement.Clone();
     }
@@ -171,7 +181,8 @@ internal static class ChatGptRequestBuilder
     /// <summary>Groups tools in the subscription namespace.</summary>
     /// <param name="writer">The JSON destination.</param>
     /// <param name="tools">The caller's tools.</param>
-    private static void WriteTools(Utf8JsonWriter writer, List<NimTool>? tools)
+    /// <param name="subscription">Whether tools are grouped in a subscription namespace.</param>
+    private static void WriteTools(Utf8JsonWriter writer, List<NimTool>? tools, bool subscription)
     {
         if (tools is not { Count: > 0 })
         {
@@ -179,11 +190,15 @@ internal static class ChatGptRequestBuilder
         }
 
         writer.WriteStartArray(nameof(tools));
-        writer.WriteStartObject();
-        writer.WriteString("type", "namespace");
-        writer.WriteString("name", "proxy");
-        writer.WriteString("description", "Tools supplied by the caller.");
-        writer.WriteStartArray(nameof(tools));
+        if (subscription)
+        {
+            writer.WriteStartObject();
+            writer.WriteString("type", "namespace");
+            writer.WriteString("name", "proxy");
+            writer.WriteString("description", "Tools supplied by the caller.");
+            writer.WriteStartArray(nameof(tools));
+        }
+
         foreach (var tool in tools)
         {
             writer.WriteStartObject();
@@ -196,15 +211,20 @@ internal static class ChatGptRequestBuilder
             writer.WriteEndObject();
         }
 
-        writer.WriteEndArray();
-        writer.WriteEndObject();
+        if (subscription)
+        {
+            writer.WriteEndArray();
+            writer.WriteEndObject();
+        }
+
         writer.WriteEndArray();
     }
 
     /// <summary>Preserves the caller's tool choice.</summary>
     /// <param name="writer">The JSON destination.</param>
     /// <param name="choice">The caller's tool choice.</param>
-    private static void WriteToolChoice(Utf8JsonWriter writer, JsonElement? choice)
+    /// <param name="subscription">Whether the selected tool belongs to a subscription namespace.</param>
+    private static void WriteToolChoice(Utf8JsonWriter writer, JsonElement? choice, bool subscription)
     {
         if (choice is not { } value)
         {
@@ -220,7 +240,11 @@ internal static class ChatGptRequestBuilder
 
         writer.WriteStartObject();
         writer.WriteString("type", FunctionType);
-        writer.WriteString("namespace", "proxy");
+        if (subscription)
+        {
+            writer.WriteString("namespace", "proxy");
+        }
+
         writer.WriteString("name", value.GetProperty(FunctionType).GetProperty("name").GetString());
         writer.WriteEndObject();
     }

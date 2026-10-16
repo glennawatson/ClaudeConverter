@@ -263,6 +263,7 @@ public static class ResponsesEndpointExtensions
         {
             UpstreamProvider.Ollama => services.OllamaClient.SendChatAsync(turn.UpstreamRequest, cancellationToken),
             UpstreamProvider.OpenAi => services.OpenAiClient.SendChatAsync(turn.UpstreamRequest, cancellationToken),
+            UpstreamProvider.Azure => (services.AzureClient ?? services.OpenAiClient).SendChatAsync(turn.UpstreamRequest, cancellationToken),
             _ => services.Client.SendChatAsync(turn.UpstreamRequest, turn.Resolved.Tier, maxAttempts, cancellationToken).AsTask(),
         };
     }
@@ -306,17 +307,63 @@ public static class ResponsesEndpointExtensions
             services.ModelHealth.MarkAvailable(model);
         }
 
-        if (!RetrySchedule.IsTransient(response.StatusCode))
-        {
-            return new(response, (int)response.StatusCode);
-        }
+        return UpstreamFallbackPolicy.NeedsInspection(response.StatusCode)
+            ? await InspectFailureAsync(response, model, services, cancellationToken).ConfigureAwait(false)
+            : new(response, (int)response.StatusCode);
+    }
 
+    /// <summary>Reads a rejected attempt before deciding whether another backend can serve it.</summary>
+    /// <param name="response">The rejected response, disposed unless it is returned to the caller.</param>
+    /// <param name="model">The upstream model that rejected the turn.</param>
+    /// <param name="services">The services the turn is served from.</param>
+    /// <param name="cancellationToken">Abandons inspection when the client disconnects.</param>
+    /// <returns>The response to retain, or a failure that allows the fallback chain to continue.</returns>
+    private static async Task<CodexModelAttempt> InspectFailureAsync(
+        HttpResponseMessage response,
+        string model,
+        CodexServices services,
+        CancellationToken cancellationToken)
+    {
         var status = (int)response.StatusCode;
-        var body = Truncated(await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false));
-        response.Dispose();
-        services.ModelHealth.MarkUnavailable(model);
+        var keepResponse = false;
+        try
+        {
+            using var deadline = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            deadline.CancelAfter(TimeSpan.FromSeconds(services.Timeouts.ReadSeconds));
 
-        return new(null, status, Body: body);
+            string body;
+            try
+            {
+                body = await response.Content.ReadAsStringAsync(deadline.Token).ConfigureAwait(false);
+            }
+            catch (Exception error) when (IsUpstreamTransportFailure(error) && !cancellationToken.IsCancellationRequested)
+            {
+                NvidiaLog.LogUpstreamTransportFailure(services.Logger, model, error);
+                services.ModelHealth.MarkUnavailable(model);
+                return new(null, status);
+            }
+
+            var unavailable = UpstreamFallbackPolicy.IsBackendUnavailable(response.StatusCode);
+            if (!unavailable && !UpstreamFallbackPolicy.IsContextLimit(body, cancellationToken))
+            {
+                keepResponse = true;
+                return new(response, status);
+            }
+
+            if (unavailable)
+            {
+                services.ModelHealth.MarkUnavailable(model);
+            }
+
+            return new(null, status, Body: Truncated(body));
+        }
+        finally
+        {
+            if (!keepResponse)
+            {
+                response.Dispose();
+            }
+        }
     }
 
     /// <summary>Rebuilds a turn around the next model in its fallback chain.</summary>
@@ -383,7 +430,7 @@ public static class ResponsesEndpointExtensions
 
         return turn.Request.IsStreaming
             ? await StreamAsync(response, context, turn, services, cancellationToken).ConfigureAwait(false)
-            : await CompleteAsync(response, turn, services, cancellationToken).ConfigureAwait(false);
+            : await CompleteAsync(response, context, turn, services, cancellationToken).ConfigureAwait(false);
     }
 
     /// <summary>Logs the exact request sent upstream, when debug logging is enabled.</summary>
@@ -688,12 +735,14 @@ public static class ResponsesEndpointExtensions
 
     /// <summary>Translates a completed upstream turn.</summary>
     /// <param name="response">The upstream response.</param>
+    /// <param name="context">The HTTP context a recovery response may be written to.</param>
     /// <param name="turn">The turn being served.</param>
     /// <param name="services">The services the turn is served from.</param>
     /// <param name="cancellationToken">Abandons the turn when the client disconnects.</param>
     /// <returns>The Responses API turn.</returns>
     private static async Task<IResult?> CompleteAsync(
         HttpResponseMessage response,
+        HttpContext context,
         CodexTurnContext turn,
         CodexServices services,
         CancellationToken cancellationToken)
@@ -715,9 +764,13 @@ public static class ResponsesEndpointExtensions
         catch (Exception error) when (IsUpstreamTransportFailure(error) && !cancellationToken.IsCancellationRequested)
         {
             NvidiaLog.LogUpstreamTransportFailure(services.Logger, turn.Resolved.NimModel, error);
-            return CodexErrors.Result(
-                StatusCodes.Status503ServiceUnavailable,
-                "The upstream connection failed or timed out before the response body finished.");
+            services.ModelHealth.MarkUnavailable(turn.Resolved.NimModel);
+            response.Dispose();
+            return turn.Resolved.Alternatives.Count > 0
+                ? await RecoverCompletionAsync(context, turn, services, cancellationToken).ConfigureAwait(false)
+                : CodexErrors.Result(
+                    StatusCodes.Status503ServiceUnavailable,
+                    "The upstream connection failed or timed out before the response body finished.");
         }
 
         var message = services.CompletionTranslator.Translate(
@@ -729,6 +782,40 @@ public static class ResponsesEndpointExtensions
             turn.Resolved.ThinkingEnabled);
 
         return TypedResults.Json(message, ProxyJsonContext.Default.ResponsesResponse);
+    }
+
+    /// <summary>Tries the remaining models after a completion body failed before producing output.</summary>
+    /// <param name="context">The HTTP context a recovery response may be written to.</param>
+    /// <param name="turn">The turn whose completion body failed.</param>
+    /// <param name="services">The services the turn is served from.</param>
+    /// <param name="cancellationToken">Abandons recovery when the client disconnects.</param>
+    /// <returns>The recovered answer, or an upstream connection error.</returns>
+    private static async Task<IResult?> RecoverCompletionAsync(
+        HttpContext context,
+        CodexTurnContext turn,
+        CodexServices services,
+        CancellationToken cancellationToken)
+    {
+        var alternatives = turn.Resolved.Alternatives;
+        var next = alternatives[0];
+        var rerouted = Rerouted(turn, services, next, Remaining(alternatives, 1));
+        NvidiaLog.FallingBackToAnotherModel(services.Logger, turn.Resolved.NimModel, next, 0, string.Empty);
+
+        try
+        {
+            var recovered = await SendWithFallbackAsync(rerouted, services, static _ => { }, cancellationToken).ConfigureAwait(false);
+            using (recovered.Response)
+            {
+                return await DispatchAsync(recovered.Response, context, recovered.Turn, services, cancellationToken).ConfigureAwait(false);
+            }
+        }
+        catch (Exception error) when (IsUpstreamTransportFailure(error) && !cancellationToken.IsCancellationRequested)
+        {
+            NvidiaLog.LogUpstreamTransportFailure(services.Logger, next, error);
+            return CodexErrors.Result(
+                StatusCodes.Status503ServiceUnavailable,
+                "The upstream connection failed or timed out before a response arrived.");
+        }
     }
 
     /// <summary>Estimates the prompt size of a Responses API request.</summary>

@@ -41,14 +41,14 @@ public sealed class UpstreamModelIdTests
         await Assert.That(parsed.Model).IsEqualTo("gpt-5-mini");
     }
 
-    /// <summary>An <c>azure:</c> prefix is an alias for the same OpenAI-compatible provider.</summary>
+    /// <summary>An <c>azure:</c> prefix addresses the independent Azure provider.</summary>
     /// <returns>A task that completes when the assertions have run.</returns>
     [Test]
-    public async Task AzurePrefixIsAnAliasForTheOpenAiCompatibleProvider()
+    public async Task AzurePrefixAddressesAzure()
     {
         var parsed = UpstreamModelId.Parse("azure:gpt-5-mini");
 
-        await Assert.That(parsed.Provider).IsEqualTo(UpstreamProvider.OpenAi);
+        await Assert.That(parsed.Provider).IsEqualTo(UpstreamProvider.Azure);
         await Assert.That(parsed.Model).IsEqualTo("gpt-5-mini");
     }
 

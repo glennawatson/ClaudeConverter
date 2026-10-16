@@ -34,8 +34,18 @@ internal static class ChatGptTransport
 
         using var message = new HttpRequestMessage(HttpMethod.Post, new Uri($"{ChatGptCredentials.Resource}/responses"));
         message.Headers.Authorization = new("Bearer", token);
-        message.Content = new StringContent(ChatGptRequestBuilder.Build(request).GetRawText(), Encoding.UTF8, JsonMediaType);
+        message.Content = new StringContent(ChatGptRequestBuilder.Build(request, cancellationToken: cancellationToken).GetRawText(), Encoding.UTF8, JsonMediaType);
         var upstream = await http.SendAsync(message, HttpCompletionOption.ResponseHeadersRead, cancellationToken).ConfigureAwait(false);
+        return await TranslateAsync(upstream, request.Stream, cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>Converts a Responses event stream into the shared chat response shape.</summary>
+    /// <param name="upstream">The upstream response, transferred to the returned stream or disposed after collection.</param>
+    /// <param name="stream">Whether the caller requested streaming.</param>
+    /// <param name="cancellationToken">Abandons the response read.</param>
+    /// <returns>A shared chat completion or translating event stream.</returns>
+    internal static async Task<HttpResponseMessage> TranslateAsync(HttpResponseMessage upstream, bool stream, CancellationToken cancellationToken)
+    {
         if (!upstream.IsSuccessStatusCode)
         {
             return upstream;
@@ -45,7 +55,7 @@ internal static class ChatGptTransport
         try
         {
             var body = await upstream.Content.ReadAsStreamAsync(cancellationToken).ConfigureAwait(false);
-            if (request.Stream)
+            if (stream)
             {
                 var result = new HttpResponseMessage(HttpStatusCode.OK) { Content = new StreamContent(new ChatGptResponseStream(upstream, body)) };
                 result.Content.Headers.ContentType = new("text/event-stream");
@@ -82,10 +92,10 @@ internal static class ChatGptTransport
 
             if (eventData.Type is "response.failed" or "error")
             {
-                return new(HttpStatusCode.BadGateway) { Content = new StringContent("{\"error\":{\"message\":\"The subscription request failed.\"}}", Encoding.UTF8, JsonMediaType) };
+                return new(HttpStatusCode.BadGateway) { Content = new StringContent("{\"error\":{\"message\":\"The upstream Responses request failed.\"}}", Encoding.UTF8, JsonMediaType) };
             }
         }
 
-        throw new IOException("The subscription stream ended before a terminal response.");
+        throw new IOException("The upstream Responses stream ended before a terminal response.");
     }
 }

@@ -67,6 +67,9 @@ public static class ProxyServiceExtensions
             ArgumentNullException.ThrowIfNull(configuration);
 
             var (nim, timeouts, ollama, openAi, anthropic) = services.AddOptions(configuration);
+            var azure = configuration.GetSection(AzureFoundryOptions.SectionName).Get<AzureFoundryOptions>()
+                ?? new AzureFoundryOptions();
+            _ = services.AddSingleton(azure);
 
             _ = services.AddSingleton(TimeProvider.System);
             _ = services.AddSingleton<IModelRouter, ModelRouter>();
@@ -85,6 +88,7 @@ public static class ProxyServiceExtensions
                 .ConfigurePrimaryHttpMessageHandler(static () => new SocketsHttpHandler { AllowAutoRedirect = false, PooledConnectionLifetime = ConnectionLifetime });
             _ = services.AddSingleton(sp => new OpenAiClient(sp.GetRequiredService<IOpenAiApi>(), openAi, sp.GetRequiredService<IHttpClientFactory>().CreateClient("Subscription")));
             _ = services.AddSingleton(sp => new AnthropicClient(sp.GetRequiredService<IAnthropicApi>(), anthropic));
+            _ = services.AddSingleton(sp => new AzureFoundryClient(sp.GetRequiredService<IAzureFoundryApi>(), azure));
 
             // Each protocol registers its own IRequestOptimizer (or none, if it has no housekeeping
             // traffic worth recognising), ICompletionTranslator and IStreamTranslatorFactory behind
@@ -102,7 +106,7 @@ public static class ProxyServiceExtensions
 
             _ = services.AddSingleton<ProxyAuthenticationFilter>();
 
-            return services.AddNimTransport(nim, timeouts).AddOpenAiCompatibleTransports(ollama, openAi).AddAnthropicTransport(anthropic);
+            return services.AddNimTransport(nim, timeouts).AddOpenAiCompatibleTransports(ollama, openAi).AddAnthropicTransport(anthropic).AddAzureTransport(azure);
         }
 
         /// <summary>Binds and registers every configuration section the proxy is assembled from.</summary>
@@ -248,6 +252,27 @@ public static class ProxyServiceExtensions
 
             return services;
         }
+
+        /// <summary>Registers an Azure transport with its own resource API key.</summary>
+        /// <param name="azure">The Azure endpoint settings.</param>
+        /// <returns>The service collection.</returns>
+        private IServiceCollection AddAzureTransport(AzureFoundryOptions azure)
+        {
+            _ = services
+                .AddRefitGeneratedClient<IAzureFoundryApi>(ProxyJsonContext.Default, static _ => TransportSettings)
+                .ConfigureHttpClient(client =>
+                {
+                    client.BaseAddress = new(azure.Endpoint());
+                    client.Timeout = Timeout.InfiniteTimeSpan;
+                    if (!string.IsNullOrEmpty(azure.ApiKey))
+                    {
+                        client.DefaultRequestHeaders.Add("api-key", azure.ApiKey);
+                    }
+                })
+                .ConfigurePrimaryHttpMessageHandler(static () => new SocketsHttpHandler { AllowAutoRedirect = false, PooledConnectionLifetime = ConnectionLifetime });
+
+            return services;
+        }
     }
 
     /// <summary>Points minimal API's own JSON serialization at the proxy's generated context.</summary>
@@ -282,7 +307,8 @@ public static class ProxyServiceExtensions
         provider.GetRequiredService<OpenAiClient>(),
         provider.GetRequiredService<AnthropicClient>(),
         provider.GetRequiredService<TimeProvider>(),
-        provider.GetRequiredService<ILogger<MessageServices>>());
+        provider.GetRequiredService<ILogger<MessageServices>>(),
+        provider.GetRequiredService<AzureFoundryOptions>().Enabled ? provider.GetRequiredService<AzureFoundryClient>() : null);
 
     /// <summary>Builds the services one Responses API turn is served from.</summary>
     /// <param name="provider">The container every dependency is resolved from.</param>
@@ -301,7 +327,8 @@ public static class ProxyServiceExtensions
         provider.GetRequiredService<OllamaClient>(),
         provider.GetRequiredService<OpenAiClient>(),
         provider.GetRequiredService<TimeProvider>(),
-        provider.GetRequiredService<ILogger<CodexEndpoints.CodexServices>>());
+        provider.GetRequiredService<ILogger<CodexEndpoints.CodexServices>>(),
+        provider.GetRequiredService<AzureFoundryOptions>().Enabled ? provider.GetRequiredService<AzureFoundryClient>() : null);
 
     /// <summary>Builds the settings the generated transport resolves and serializes with.</summary>
     /// <returns>The settings.</returns>

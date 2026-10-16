@@ -8,7 +8,7 @@ using ClaudeNim.Aot.Serialization;
 
 namespace ClaudeNim.Aot.Nvidia;
 
-/// <summary>Translates subscription events as the caller reads them.</summary>
+/// <summary>Translates Responses events as the caller reads them.</summary>
 internal sealed class ChatGptResponseStream : Stream
 {
     /// <summary>The upstream response owned by this stream.</summary>
@@ -65,7 +65,7 @@ internal sealed class ChatGptResponseStream : Stream
         while (_pending.IsEmpty && !_finished)
         {
             var eventData = await ReadEventAsync(_reader, cancellationToken).ConfigureAwait(false)
-                ?? throw new IOException("The subscription stream ended before a terminal response.");
+                ?? throw new IOException("The upstream Responses stream ended before a terminal response.");
             var chunk = ChatGptResponseTranslator.Chunk(eventData, _toolSlots);
             _finished = eventData.Type is "response.completed" or "response.incomplete" or "response.failed" or "error";
             if (chunk is null)

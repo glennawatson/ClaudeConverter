@@ -196,7 +196,7 @@ public sealed class ModelRouterTests
         await Assert.That(new ModelRouter(new ModelRoutingOptions()).Resolve(SonnetName).Alternatives.Count)
             .IsEqualTo(0);
 
-    /// <summary>A model named by gateway identifier is never substituted for another.</summary>
+    /// <summary>A model named by gateway identifier has no fallback chain unless the operator opts in.</summary>
     /// <returns>A task that completes when the assertion has run.</returns>
     /// <remarks>
     /// The client picked that model from the listing this proxy advertised. Answering as a
@@ -211,5 +211,32 @@ public sealed class ModelRouterTests
         var resolved = router.Resolve(GatewayModelId.Encode(UpstreamModel));
 
         await Assert.That(resolved.Alternatives.Count).IsEqualTo(0);
+    }
+
+    /// <summary>Opting in gives a selected provider model the default backup chain without repeating the primary.</summary>
+    /// <param name="thinking">Whether the selected gateway variant enables reasoning.</param>
+    /// <returns>A task representing the asynchronous test.</returns>
+    [Test]
+    [Arguments(true)]
+    [Arguments(false)]
+    public async Task Resolve_ExplicitModelFallbackEnabled_UsesDistinctDefaultBackups(bool thinking)
+    {
+        const string ExplicitModel = "azure:chosen-deployment";
+        var options = new ModelRoutingOptions(
+            DefaultFallbacks: $"{ExplicitModel}, {FallbackFirst}, {FallbackFirst}, {FallbackSecond}",
+            OpusFallbacks: FallbackThird,
+            FallbackForExplicitModels: true);
+        var router = new ModelRouter(options);
+        var encoded = thinking
+            ? GatewayModelId.Encode(ExplicitModel)
+            : GatewayModelId.EncodeWithoutThinking(ExplicitModel);
+
+        var resolved = router.Resolve(encoded);
+
+        await Assert.That(resolved.NimModel).IsEqualTo(ExplicitModel);
+        await Assert.That(resolved.ThinkingEnabled).IsEqualTo(thinking);
+        await Assert.That(resolved.Alternatives.Count).IsEqualTo(ConfiguredFallbackCount);
+        await Assert.That(resolved.Alternatives[0]).IsEqualTo(FallbackFirst);
+        await Assert.That(resolved.Alternatives[1]).IsEqualTo(FallbackSecond);
     }
 }

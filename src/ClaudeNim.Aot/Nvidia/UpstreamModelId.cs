@@ -24,7 +24,7 @@ public readonly record struct UpstreamModelId(UpstreamProvider Provider, string 
     /// <summary>The prefixes that address an OpenAI-compatible endpoint.</summary>
     private const string OpenAiPrefix = "openai";
 
-    /// <summary>An alias for <see cref="OpenAiPrefix"/>, since an Azure AI Foundry deployment speaks the same shape.</summary>
+    /// <summary>The prefix that addresses Azure Foundry.</summary>
     private const string AzurePrefix = "azure";
 
     /// <summary>The prefix that addresses real Anthropic.</summary>
@@ -58,7 +58,8 @@ public readonly record struct UpstreamModelId(UpstreamProvider Provider, string 
         return prefix switch
         {
             OllamaPrefix => new(UpstreamProvider.Ollama, rest),
-            OpenAiPrefix or AzurePrefix => new(UpstreamProvider.OpenAi, rest),
+            OpenAiPrefix => new(UpstreamProvider.OpenAi, rest),
+            AzurePrefix => new(UpstreamProvider.Azure, rest),
             ClaudePrefix or AnthropicPrefix => new(UpstreamProvider.Anthropic, rest),
             _ => new(UpstreamProvider.Nim, modelId),
         };

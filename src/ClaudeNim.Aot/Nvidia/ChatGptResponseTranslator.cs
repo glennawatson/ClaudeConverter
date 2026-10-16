@@ -7,7 +7,7 @@ using ClaudeNim.Aot.Codex.Streaming;
 
 namespace ClaudeNim.Aot.Nvidia;
 
-/// <summary>Converts subscription responses to the shared upstream format.</summary>
+/// <summary>Converts Responses API replies to the shared upstream format.</summary>
 internal static class ChatGptResponseTranslator
 {
     /// <summary>Converts a terminal response.</summary>
@@ -68,7 +68,7 @@ internal static class ChatGptResponseTranslator
             }
 
             case "response.failed" or "error":
-                return new(Error: new(eventData.Response?.Error?.Message ?? "The subscription request failed."));
+                return new(Error: new(eventData.Response?.Error?.Message ?? "The upstream Responses request failed."));
             default:
                 return null;
         }

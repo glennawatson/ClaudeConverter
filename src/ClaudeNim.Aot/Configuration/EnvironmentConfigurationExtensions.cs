@@ -75,6 +75,7 @@ public static class EnvironmentConfigurationExtensions
         new("SONNET_FALLBACK_MODELS", "ModelRouting:SonnetFallbacks"),
         new("SMALL_FALLBACK_MODELS", "ModelRouting:HaikuFallbacks"),
         new("HAIKU_FALLBACK_MODELS", "ModelRouting:HaikuFallbacks"),
+        new("FALLBACK_FOR_EXPLICIT_MODELS", "ModelRouting:FallbackForExplicitModels"),
 
         new("ENABLE_THINKING", "ModelRouting:EnableThinking"),
         new("ENABLE_OPUS_THINKING", "ModelRouting:EnableOpusThinking"),
@@ -85,6 +86,7 @@ public static class EnvironmentConfigurationExtensions
         new("DEFAULT_CONTEXT_WINDOW", "ModelCatalog:DefaultContextWindow"),
         new("DEFAULT_MAX_OUTPUT_TOKENS", "ModelCatalog:DefaultMaxOutputTokens"),
         new("ADVERTISE_CLAUDE_ALIASES", "ModelCatalog:AdvertiseClaudeAliases"),
+        new("ADDITIONAL_MODELS", "ModelCatalog:AdditionalModels"),
 
         new("REQUESTS_PER_WINDOW", "RateLimits:RequestsPerWindow"),
         new("RATE_LIMIT_WINDOW_SECONDS", "RateLimits:WindowSeconds"),
@@ -117,6 +119,12 @@ public static class EnvironmentConfigurationExtensions
         new("CHATGPT_CREDENTIALS_PATH", "OpenAi:CredentialsPath"),
         new("OPENAI_READ_TIMEOUT_SECONDS", "OpenAi:ReadSeconds"),
         new("OPENAI_COMPLETION_TIMEOUT_SECONDS", "OpenAi:CompletionSeconds"),
+
+        new("AZURE_ENABLED", "AzureFoundry:Enabled"),
+        new("AZURE_BASE_URL", "AzureFoundry:BaseUrl"),
+        new("AZURE_API_KEY", "AzureFoundry:ApiKey"),
+        new("AZURE_READ_TIMEOUT_SECONDS", "AzureFoundry:ReadSeconds"),
+        new("AZURE_COMPLETION_TIMEOUT_SECONDS", "AzureFoundry:CompletionSeconds"),
 
         // CLAUDE_API_* rather than ANTHROPIC_API_* deliberately: ANTHROPIC_API_KEY above already
         // means the credential a caller authenticates to this proxy with, and reusing it here for

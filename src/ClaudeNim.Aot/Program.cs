@@ -6,6 +6,7 @@ using ClaudeNim.Aot.Configuration;
 using ClaudeNim.Aot.Hosting;
 using ClaudeNim.Aot.Nvidia;
 using Microsoft.AspNetCore.Builder;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
@@ -40,8 +41,25 @@ public static class Program
     /// <returns>A task that completes once the host shuts down.</returns>
     public static async Task Main(string[] args)
     {
+        if (args.Length > 0 && args[0] == "--azure-configure")
+        {
+            const int setupMinutes = 5;
+            using var timeout = new CancellationTokenSource(TimeSpan.FromMinutes(setupMinutes));
+            Environment.ExitCode = await AzureFoundrySetup.RunAsync(
+                args[1..],
+                AzureFoundrySetup.PathFor(Environment.GetEnvironmentVariable("AZURE_PROFILE_PATH")),
+                Console.Out,
+                Console.Error,
+                AzureFoundrySetup.ExecuteAsync,
+                timeout.Token).ConfigureAwait(false);
+
+            return;
+        }
+
         var login = args.Length > 0 && args[0] == "--chatgpt-login";
         var builder = WebApplication.CreateSlimBuilder(login ? args[1..] : args);
+
+        _ = builder.Configuration.AddJsonFile(AzureFoundrySetup.PathFor(Environment.GetEnvironmentVariable("AZURE_PROFILE_PATH")), optional: true, reloadOnChange: false);
 
         // Environment variables win over the settings file: the proxy is usually run from a shell
         // or a container, where a credential in a file on disk is the thing you least want.

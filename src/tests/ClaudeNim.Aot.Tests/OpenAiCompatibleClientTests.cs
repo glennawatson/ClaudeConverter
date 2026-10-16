@@ -11,6 +11,12 @@ namespace ClaudeNim.Aot.Tests;
 /// <summary>Covers the bound applied around a call to Ollama or an OpenAI-compatible endpoint.</summary>
 public sealed class OpenAiCompatibleClientTests
 {
+    /// <summary>A non-default sampling temperature used to verify omission.</summary>
+    private const double SamplingTemperature = 0.5;
+
+    /// <summary>A non-default sampling cutoff used to verify omission.</summary>
+    private const double SamplingCutoff = 0.8;
+
     /// <summary>A minimal request used across the fixtures.</summary>
     private static readonly NimChatRequest Request = new("qwen3-coder:30b", [], 100, Stream: false);
 
@@ -25,6 +31,53 @@ public sealed class OpenAiCompatibleClientTests
 
         await Assert.That(api.Requests[0].MaxTokens).IsEqualTo(0);
         await Assert.That(api.Requests[0].MaxCompletionTokens).IsEqualTo(Request.MaxTokens);
+    }
+
+    /// <summary>Azure GPT deployments receive completion-token limits and supported reasoning controls.</summary>
+    /// <param name="baseUrl">The Azure v1 endpoint.</param>
+    /// <returns>A task representing the asynchronous test.</returns>
+    [Test]
+    [Arguments("https://example.cognitiveservices.azure.com/openai/v1")]
+    [Arguments("https://example.openai.azure.com/openai/v1")]
+    [Arguments("https://example.services.ai.azure.com/openai/v1")]
+    public async Task AzureGptOmitsUnsupportedControls(string baseUrl)
+    {
+        var api = new FakeOpenAiApi();
+        var client = new OpenAiClient(api, new OpenAiCompatibleOptions(Enabled: true, BaseUrl: baseUrl));
+        var request = Request with
+        {
+            Model = "gpt-6.1-sol",
+            Temperature = SamplingTemperature,
+            TopP = SamplingCutoff,
+            Stop = ["stop"],
+            ReasoningEffort = "high",
+            Messages = [new("assistant", NimContent.FromText("answer"), ReasoningContent: "private trace")],
+        };
+
+        using var response = await client.SendChatAsync(request, CancellationToken.None);
+        var sent = api.Requests[0];
+
+        await Assert.That(sent.MaxTokens).IsEqualTo(0);
+        await Assert.That(sent.MaxCompletionTokens).IsEqualTo(request.MaxTokens);
+        await Assert.That(sent.Temperature).IsNull();
+        await Assert.That(sent.TopP).IsNull();
+        await Assert.That(sent.Stop).IsNull();
+        await Assert.That(sent.ReasoningEffort).IsEqualTo("high");
+        await Assert.That(sent.Messages[0].ReasoningContent).IsNull();
+    }
+
+    /// <summary>Custom compatible endpoints keep their existing token-limit shape.</summary>
+    /// <returns>A task representing the asynchronous test.</returns>
+    [Test]
+    public async Task CustomEndpointKeepsMaxTokens()
+    {
+        var api = new FakeOpenAiApi();
+        var client = new OpenAiClient(api, new OpenAiCompatibleOptions(Enabled: true, BaseUrl: "https://compatible.example/v1"));
+
+        using var response = await client.SendChatAsync(Request, CancellationToken.None);
+
+        await Assert.That(api.Requests[0].MaxTokens).IsEqualTo(Request.MaxTokens);
+        await Assert.That(api.Requests[0].MaxCompletionTokens).IsNull();
     }
 
     /// <summary>The hosted backend receives no template settings for local models.</summary>

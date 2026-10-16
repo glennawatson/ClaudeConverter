@@ -21,9 +21,10 @@ namespace ClaudeNim.Aot.Endpoints.Codex;
 /// <param name="ModelHealth">Tracks which models are cooling down, so a fallback chain can skip them.</param>
 /// <param name="Timeouts">The configured upstream timeouts.</param>
 /// <param name="OllamaClient">The transport a model addressed with the <c>ollama:</c> prefix resolves to.</param>
-/// <param name="OpenAiClient">The transport a model addressed with the <c>openai:</c>/<c>azure:</c> prefix resolves to.</param>
+/// <param name="OpenAiClient">The hosted transport, also used for legacy Azure configuration.</param>
 /// <param name="Time">The clock a re-issued streamed turn's backoff is measured against.</param>
 /// <param name="Logger">The diagnostic log.</param>
+/// <param name="AzureClient">The independent Azure transport, or null to use the legacy OpenAi configuration.</param>
 /// <remarks>
 /// No request optimizer: Codex's own housekeeping traffic, if it has any, has not been observed and
 /// characterised the way Claude Code's has, so nothing here is answered locally yet.
@@ -42,4 +43,5 @@ public sealed record CodexServices(
     IOpenAiCompatibleClient OllamaClient,
     IOpenAiCompatibleClient OpenAiClient,
     TimeProvider Time,
-    ILogger<CodexServices> Logger);
+    ILogger<CodexServices> Logger,
+    IOpenAiCompatibleClient? AzureClient = null);
