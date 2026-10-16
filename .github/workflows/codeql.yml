@@ -27,7 +27,7 @@ jobs:
       with:
         fetch-depth: 0
     - name: Setup .NET Environment
-      uses: glennawatson/actions-common/.github/actions/dotnet-environment@main
+      uses: glennawatson/actions-common/.github/actions/dotnet-environment@7f2014219353aee799dfeef2a9b97acaeabca0b8 # main
     - name: Initialize CodeQL
       uses: github/codeql-action/init@6f2ac81f5cd81fe351a197ba0b00d91d03cd2aee
       with:
@@ -35,7 +35,7 @@ jobs:
         build-mode: manual
         queries: security-extended
     - name: Build
-      uses: glennawatson/actions-common/.github/actions/dotnet-build@main
+      uses: glennawatson/actions-common/.github/actions/dotnet-build@7f2014219353aee799dfeef2a9b97acaeabca0b8 # main
       with:
         solution-file: claude-nim-aot-csharp.slnx
     - name: Perform CodeQL Analysis
