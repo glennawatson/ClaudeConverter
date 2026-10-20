@@ -55,7 +55,7 @@ runs:
   using: composite
   steps:
   - id: shared
-    uses: glennawatson/actions-common/.github/actions/compute-version-and-tag@main
+    uses: glennawatson/actions-common/.github/actions/compute-version-and-tag@315788024be8e61daa4f2b957e6476746211b522 # main
     with:
       bump: ${{ inputs.bump }}
       tag-prefix: ${{ inputs.tag-prefix }}
