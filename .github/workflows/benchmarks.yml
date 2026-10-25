@@ -28,7 +28,7 @@ jobs:
       with:
         fetch-depth: 0
     - name: Setup .NET Environment
-      uses: glennawatson/actions-common/.github/actions/dotnet-environment@main
+      uses: glennawatson/actions-common/.github/actions/dotnet-environment@4d538f76071ed73496cbf406cebe85e760fb734d # main
     - name: Checkout measured commit
       uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
       with:
@@ -37,18 +37,18 @@ jobs:
     - name: Run benchmarks
       env:
         FILTER: ${{ inputs.filter }}
-      uses: glennawatson/actions-common/.github/actions/run-csharp@main
+      uses: glennawatson/actions-common/.github/actions/run-csharp@4d538f76071ed73496cbf406cebe85e760fb734d # main
       with:
         shared-script: run-benchmarks-a5157d6436.cs
     - name: Validate benchmark reports
-      uses: glennawatson/actions-common/.github/actions/run-csharp@main
+      uses: glennawatson/actions-common/.github/actions/run-csharp@4d538f76071ed73496cbf406cebe85e760fb734d # main
       with:
         shared-script: validate-benchmark-reports-d4d2d9c924.cs
     - name: Publish results to run summary
       if: always()
       env:
         FILTER: ${{ inputs.filter }}
-      uses: glennawatson/actions-common/.github/actions/run-csharp@main
+      uses: glennawatson/actions-common/.github/actions/run-csharp@4d538f76071ed73496cbf406cebe85e760fb734d # main
       with:
         shared-script: publish-results-to-run-summary-0e6e55f71b.cs
     - name: Upload benchmark reports

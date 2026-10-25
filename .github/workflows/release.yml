@@ -45,12 +45,12 @@ jobs:
         ref: ${{ inputs.sourceRef }}
         fetch-depth: 0
     - name: Setup .NET Environment
-      uses: glennawatson/actions-common/.github/actions/dotnet-environment@main
+      uses: glennawatson/actions-common/.github/actions/dotnet-environment@4d538f76071ed73496cbf406cebe85e760fb734d # main
       with:
         stamp-version: 'false'
     - name: Resolve built commit SHA
       id: sourcesha
-      uses: glennawatson/actions-common/.github/actions/run-csharp@main
+      uses: glennawatson/actions-common/.github/actions/run-csharp@4d538f76071ed73496cbf406cebe85e760fb734d # main
       with:
         shared-script: resolve-built-commit-sha-c775df1621.cs
     - name: Validate version inputs
@@ -58,13 +58,13 @@ jobs:
         BUMP: ${{ inputs.bump }}
         PRE_RELEASE: ${{ inputs.preRelease }}
         VERSION_OVERRIDE: ${{ inputs.versionOverride }}
-      uses: glennawatson/actions-common/.github/actions/run-csharp@main
+      uses: glennawatson/actions-common/.github/actions/run-csharp@4d538f76071ed73496cbf406cebe85e760fb734d # main
       with:
         shared-script: validate-version-inputs-2aad3ac3e2.cs
     - name: Compute version and tag
       if: inputs.bump != '(pick one)' && inputs.versionOverride == ''
       id: bump
-      uses: glennawatson/actions-common/.github/actions/compute-version-and-tag@main
+      uses: glennawatson/actions-common/.github/actions/compute-version-and-tag@4d538f76071ed73496cbf406cebe85e760fb734d # main
       with:
         bump: ${{ inputs.bump }}
         tag-prefix: ''
@@ -76,12 +76,12 @@ jobs:
         BUMP_TAG: ${{ steps.bump.outputs.tag }}
         BUMP_PRERELEASE: ${{ steps.bump.outputs.prerelease }}
         VERSION_OVERRIDE: ${{ inputs.versionOverride }}
-      uses: glennawatson/actions-common/.github/actions/run-csharp@main
+      uses: glennawatson/actions-common/.github/actions/run-csharp@4d538f76071ed73496cbf406cebe85e760fb734d # main
       with:
         shared-script: resolve-release-tag-d98a6a5208.cs
     - name: Stamp version with MinVer
       id: minver
-      uses: glennawatson/actions-common/.github/actions/minver@main
+      uses: glennawatson/actions-common/.github/actions/minver@4d538f76071ed73496cbf406cebe85e760fb734d # main
       with:
         version-override: ${{ inputs.versionOverride != '' && inputs.versionOverride || steps.bump.outputs.version }}
   publish:
@@ -105,14 +105,14 @@ jobs:
       with:
         ref: ${{ needs.build.outputs.sourceSha }}
     - name: Setup .NET Environment
-      uses: glennawatson/actions-common/.github/actions/dotnet-environment@main
+      uses: glennawatson/actions-common/.github/actions/dotnet-environment@4d538f76071ed73496cbf406cebe85e760fb734d # main
       with:
         stamp-version: 'false'
     - name: Publish self-contained AOT binary
       env:
         RID: ${{ matrix.rid }}
         VERSION: ${{ needs.build.outputs.semver2 }}
-      uses: glennawatson/actions-common/.github/actions/run-command@main
+      uses: glennawatson/actions-common/.github/actions/run-command@4d538f76071ed73496cbf406cebe85e760fb734d # main
       with:
         command: dotnet
         arguments: |-
@@ -132,7 +132,7 @@ jobs:
       env:
         RID: ${{ matrix.rid }}
         VERSION: ${{ needs.build.outputs.semver2 }}
-      uses: glennawatson/actions-common/.github/actions/run-csharp@main
+      uses: glennawatson/actions-common/.github/actions/run-csharp@4d538f76071ed73496cbf406cebe85e760fb734d # main
       with:
         shared-script: zip-the-published-output-1cbb9cfd2b.cs
     - name: Upload platform archive
@@ -158,11 +158,11 @@ jobs:
         path: archives
         merge-multiple: true
     - name: Setup .NET Environment
-      uses: glennawatson/actions-common/.github/actions/dotnet-environment@main
+      uses: glennawatson/actions-common/.github/actions/dotnet-environment@4d538f76071ed73496cbf406cebe85e760fb734d # main
       with:
         stamp-version: 'false'
     - name: Install GitReleaseNoteGenerator
-      uses: glennawatson/actions-common/.github/actions/run-command@main
+      uses: glennawatson/actions-common/.github/actions/run-command@4d538f76071ed73496cbf406cebe85e760fb734d # main
       with:
         command: dotnet
         arguments: |-
@@ -175,7 +175,7 @@ jobs:
       env:
         GITHUB_TOKEN: ${{ github.token }}
         RELEASE_VERSION: ${{ needs.build.outputs.semver2 }}
-      uses: glennawatson/actions-common/.github/actions/run-command@main
+      uses: glennawatson/actions-common/.github/actions/run-command@4d538f76071ed73496cbf406cebe85e760fb734d # main
       with:
         command: git-release-notes
         arguments: |-
@@ -192,6 +192,6 @@ jobs:
         TARGET: ${{ needs.build.outputs.sourceSha }}
         TITLE: ${{ needs.build.outputs.semver2 }}
         PRERELEASE: ${{ needs.build.outputs.prerelease }}
-      uses: glennawatson/actions-common/.github/actions/run-csharp@main
+      uses: glennawatson/actions-common/.github/actions/run-csharp@4d538f76071ed73496cbf406cebe85e760fb734d # main
       with:
         shared-script: create-github-release-c1548b341c.cs

@@ -16,7 +16,7 @@ jobs:
       fail-fast: false
       matrix:
         os: [windows-latest, ubuntu-latest, macos-latest]
-    uses: glennawatson/actions-common/.github/workflows/workflow-common-setup-and-build.yml@main
+    uses: glennawatson/actions-common/.github/workflows/workflow-common-setup-and-build.yml@4d538f76071ed73496cbf406cebe85e760fb734d # main
     with:
       runner: ${{ matrix.os }}
       solutionFile: claude-nim-aot-csharp.slnx
