@@ -27,10 +27,20 @@
   </ItemGroup>
 
   <ItemGroup Label="Testing">
-    <PackageVersion Include="Microsoft.AspNetCore.Mvc.Testing" Version="10.0.15" Condition="'$(TargetFramework)' != 'net11.0'" />
-    <PackageVersion Include="Microsoft.AspNetCore.Mvc.Testing" Version="11.0.0" Condition="'$(TargetFramework)' == 'net11.0'" />
     <PackageVersion Include="Microsoft.Testing.Extensions.CodeCoverage" Version="18.12.0" />
     <PackageVersion Include="TUnit" Version="1.84.0" />
   </ItemGroup>
 
+  <Choose>
+    <When Condition="'$(TargetFramework)' != '' And $([MSBuild]::IsTargetFrameworkCompatible('$(TargetFramework)', 'net11.0'))">
+      <ItemGroup>
+        <PackageVersion Include="Microsoft.AspNetCore.Mvc.Testing" Version="11.0.0" />
+      </ItemGroup>
+    </When>
+    <Otherwise>
+      <ItemGroup>
+        <PackageVersion Include="Microsoft.AspNetCore.Mvc.Testing" Version="10.0.15" />
+      </ItemGroup>
+    </Otherwise>
+  </Choose>
 </Project>
